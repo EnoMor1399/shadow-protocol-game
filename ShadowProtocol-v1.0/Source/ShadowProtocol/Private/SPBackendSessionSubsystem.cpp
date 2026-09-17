@@ -86,8 +86,10 @@ void USPBackendSessionSubsystem::HandleCompatibilityResponse(FHttpRequestPtr Req
 
     LastCompatibility = Compatibility;
     const FString LocalBuild = USPBuildInfoLibrary::GetNetworkBuildId();
-    const bool bServerAcceptsLocal = Compatibility.AcceptedNetworkBuilds.IsEmpty() || Compatibility.AcceptedNetworkBuilds.Contains(LocalBuild);
-    bCompatibilityVerified = USPBuildInfoLibrary::IsNetworkBuildCompatible(Compatibility.NetworkBuild, true) && bServerAcceptsLocal;
+    const bool bServerAcceptsLocal = Compatibility.AcceptedNetworkBuilds.IsEmpty()
+        ? USPBuildInfoLibrary::IsNetworkBuildCompatible(Compatibility.NetworkBuild, true)
+        : Compatibility.AcceptedNetworkBuilds.Contains(LocalBuild);
+    bCompatibilityVerified = bServerAcceptsLocal;
 
     OnCompatibilityChecked.Broadcast(bCompatibilityVerified, LastCompatibility);
 
@@ -175,6 +177,8 @@ void USPBackendSessionSubsystem::AllocateProtocolServer(const FString& Region, b
         return;
     }
 
+    bPendingRankedAllocation = bRanked;
+
     const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
     Payload->SetStringField(TEXT("region"), EffectiveRegion);
     Payload->SetStringField(TEXT("mode"), TEXT("PROTOCOL"));
@@ -252,7 +256,7 @@ void USPBackendSessionSubsystem::HandleAllocationResponse(FHttpRequestPtr Reques
         return;
     }
 
-    if (!USPBuildInfoLibrary::IsNetworkBuildCompatible(Allocation.NetworkBuild, bRanked))
+    if (!USPBuildInfoLibrary::IsNetworkBuildCompatible(Allocation.NetworkBuild, bPendingRankedAllocation))
     {
         OnUpgradeRequired.Broadcast(Allocation.NetworkBuild, Allocation.BackendProtocol, TEXT("Allocated server build does not match the local client."));
         return;
@@ -261,7 +265,7 @@ void USPBackendSessionSubsystem::HandleAllocationResponse(FHttpRequestPtr Reques
     OnAllocationCompleted.Broadcast(Allocation);
 }
 
-void USPBackendSessionSubsystem::BroadcastHttpFailure(const FString& Context, FHttpResponsePtr Response, bool bWasSuccessful) const
+void USPBackendSessionSubsystem::BroadcastHttpFailure(const FString& Context, FHttpResponsePtr Response, bool bWasSuccessful)
 {
     FString Message;
     if (!bWasSuccessful)
@@ -277,7 +281,7 @@ void USPBackendSessionSubsystem::BroadcastHttpFailure(const FString& Context, FH
         Message = TEXT("Backend response was not available.");
     }
 
-    const_cast<USPBackendSessionSubsystem*>(this)->OnRequestFailed.Broadcast(Context, Message);
+    OnRequestFailed.Broadcast(Context, Message);
 }
 
 void USPBackendSessionSubsystem::HandleUpgradeResponse(const TSharedPtr<FJsonObject>& JsonObject, const FString& FallbackReason)
