@@ -2,7 +2,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import { Pool } from 'pg';
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 import { z } from 'zod';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
@@ -305,7 +305,7 @@ app.post('/v1/matches/combat-events',async(req,reply)=>{
 
 app.get('/v1/live', { websocket:true }, (socket) => {
   socket.send(JSON.stringify({ type:'hello', system:'SHADOW PROTOCOL', message:'EVERY MOVE IS CLASSIFIED.', networkBuild:NETWORK_BUILD, backendProtocol:BACKEND_PROTOCOL_VERSION }));
-  socket.on('message', (raw) => {
+  socket.on('message', (raw:any) => {
     // Production socket accepts authenticated presence/party events only; authoritative match state stays on dedicated server.
     socket.send(JSON.stringify({ type:'ack', receivedBytes:raw.byteLength }));
   });
