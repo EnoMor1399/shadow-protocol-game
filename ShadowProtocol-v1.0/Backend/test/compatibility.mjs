@@ -5,7 +5,10 @@ import { spawn } from 'node:child_process';
 const PORT = 18081;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const BOOTSTRAP_SECRET = 'ci-bootstrap-secret';
+const MATCH_SERVER_SECRET = 'ci-match-server-secret';
 const TEST_USER_ID = '11111111-1111-4111-8111-111111111111';
+const SPOOFED_USER_ID = '22222222-2222-4222-8222-222222222222';
+const TEST_MATCH_ID = '33333333-3333-4333-8333-333333333333';
 let serverProcess;
 
 async function waitForServer() {
@@ -22,7 +25,7 @@ async function waitForServer() {
   throw lastError ?? new Error('Shadow Protocol backend did not become ready.');
 }
 
-async function createGameSession(build) {
+async function createGameSession(build = 'SP-1.0.1') {
   return fetch(`${BASE_URL}/v1/auth/game-session`, {
     method: 'POST',
     headers: {
@@ -38,6 +41,12 @@ async function createGameSession(build) {
   });
 }
 
+async function getValidSession() {
+  const response = await createGameSession();
+  assert.equal(response.status, 201);
+  return response.json();
+}
+
 before(async () => {
   serverProcess = spawn(process.execPath, ['--import', 'tsx', 'src/server.ts'], {
     cwd: process.cwd(),
@@ -48,6 +57,7 @@ before(async () => {
       REDIS_URL: '',
       SESSION_SIGNING_SECRET: 'ci-session-signing-secret',
       SESSION_BOOTSTRAP_SECRET: BOOTSTRAP_SECRET,
+      MATCH_SERVER_SECRET,
       ACCEPTED_NETWORK_BUILDS: 'SP-1.0.1'
     },
     stdio: ['ignore', 'pipe', 'pipe']
@@ -87,9 +97,7 @@ test('rejects an incompatible client before issuing a game session', async () =>
 });
 
 test('issues and allocates an authenticated SP-1.0.1 session', async () => {
-  const sessionResponse = await createGameSession('SP-1.0.1');
-  assert.equal(sessionResponse.status, 201);
-  const session = await sessionResponse.json();
+  const session = await getValidSession();
   assert.ok(session.sessionId);
   assert.ok(session.sessionToken);
   assert.equal(session.compatibility.networkBuild, 'SP-1.0.1');
@@ -113,4 +121,88 @@ test('issues and allocates an authenticated SP-1.0.1 session', async () => {
   assert.equal(allocation.networkBuild, 'SP-1.0.1');
   assert.equal(allocation.backendProtocol, '0.8.0');
   assert.equal(allocation.tickRate, 60);
+});
+
+test('requires an authenticated compatible session for matchmaking', async () => {
+  const unauthenticated = await fetch(`${BASE_URL}/v1/matchmaking/queue`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ region: 'acc', latencyMs: 42, partySize: 1 })
+  });
+  assert.equal(unauthenticated.status, 401);
+
+  const session = await getValidSession();
+  const queued = await fetch(`${BASE_URL}/v1/matchmaking/queue`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${session.sessionToken}`
+    },
+    body: JSON.stringify({
+      region: 'acc',
+      latencyMs: 42,
+      partySize: 1,
+      userId: SPOOFED_USER_ID,
+      skillRating: 9999,
+      trustScore: 100
+    })
+  });
+
+  assert.equal(queued.status, 200);
+  const payload = await queued.json();
+  assert.ok(payload.ticket.startsWith('mm_'));
+  assert.equal(payload.userId, TEST_USER_ID);
+  assert.equal(payload.region, 'acc');
+});
+
+test('rejects public clients from authoritative match telemetry', async () => {
+  const eventBody = {
+    matchId: TEST_MATCH_ID,
+    eventType: 'objective_state',
+    gameTimeMs: 1200,
+    payload: { state: 'secured' }
+  };
+
+  const publicResponse = await fetch(`${BASE_URL}/v1/matches/events`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(eventBody)
+  });
+  assert.equal(publicResponse.status, 401);
+  assert.equal((await publicResponse.json()).error, 'match-server-auth-required');
+
+  const serverResponse = await fetch(`${BASE_URL}/v1/matches/events`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-match-server-secret': MATCH_SERVER_SECRET
+    },
+    body: JSON.stringify(eventBody)
+  });
+  assert.equal(serverResponse.status, 202);
+  assert.equal((await serverResponse.json()).authority, 'dedicated-server');
+});
+
+test('fails reconnect and ready-state ownership checks closed without PostgreSQL', async () => {
+  const session = await getValidSession();
+  const headers = {
+    'content-type': 'application/json',
+    authorization: `Bearer ${session.sessionToken}`
+  };
+
+  const reconnectTicket = await fetch(`${BASE_URL}/v1/matches/reconnect-ticket`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ matchId: TEST_MATCH_ID, roundNumber: 1, slotIndex: 0 })
+  });
+  assert.equal(reconnectTicket.status, 503);
+  assert.equal((await reconnectTicket.json()).error, 'database-not-configured');
+
+  const readyState = await fetch(`${BASE_URL}/v1/matches/ready-state`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ matchId: TEST_MATCH_ID, roundNumber: 1, slotIndex: 0, ready: true, spawnGroup: 'ALPHA' })
+  });
+  assert.equal(readyState.status, 503);
+  assert.equal((await readyState.json()).error, 'database-not-configured');
 });
