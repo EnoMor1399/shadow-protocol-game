@@ -96,6 +96,26 @@ test('rejects an incompatible client before issuing a game session', async () =>
   assert.deepEqual(payload.acceptedNetworkBuilds, ['SP-1.0.1']);
 });
 
+test('refreshes an authenticated compatible game session', async () => {
+  const session = await getValidSession();
+  const originalExpiry = Date.parse(session.expiresAt);
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const response = await fetch(`${BASE_URL}/v1/auth/refresh`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${session.sessionToken}` }
+  });
+
+  assert.equal(response.status, 200);
+  const refreshed = await response.json();
+  assert.equal(refreshed.sessionId, session.sessionId);
+  assert.equal(refreshed.region, 'acc');
+  assert.ok(refreshed.sessionToken);
+  assert.ok(Date.parse(refreshed.expiresAt) >= originalExpiry);
+  assert.equal(refreshed.compatibility.networkBuild, 'SP-1.0.1');
+  assert.equal(refreshed.compatibility.backendProtocol, '0.8.0');
+});
+
 test('issues and allocates an authenticated SP-1.0.1 session', async () => {
   const session = await getValidSession();
   assert.ok(session.sessionId);
