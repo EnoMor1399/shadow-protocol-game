@@ -17,6 +17,8 @@ const GAME_RELEASE = '1.0.1';
 const NETWORK_BUILD = 'SP-1.0.1';
 const CONTENT_REVISION = 'EMBASSY-PROTOCOL-101';
 const BACKEND_PROTOCOL_VERSION = '0.8.0';
+const SESSION_TTL_MS = 15 * 60_000;
+const SESSION_TTL_SECONDS = Math.floor(SESSION_TTL_MS / 1000);
 const ACCEPTED_NETWORK_BUILDS = new Set(
   (process.env.ACCEPTED_NETWORK_BUILDS ?? NETWORK_BUILD)
     .split(',')
@@ -82,11 +84,23 @@ app.post('/v1/auth/game-session',async(req,reply)=>{
   if(String(req.headers['x-session-bootstrap-secret']??'')!==SESSION_BOOTSTRAP_SECRET)return reply.code(401).send({error:'bootstrap-auth-required'});
   const parsed=gameSessionSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(!isBuildCompatible(parsed.data.build))return incompatibleBuild(reply,parsed.data.build);
-  const sessionId=crypto.randomUUID(),expiresAt=Date.now()+15*60_000;
+  const sessionId=crypto.randomUUID(),expiresAt=Date.now()+SESSION_TTL_MS;
   const token=signSession({sid:sessionId,uid:parsed.data.userId,region:parsed.data.region,build:parsed.data.build,protocol:BACKEND_PROTOCOL_VERSION,exp:expiresAt});
   if(pool)await pool.query(`insert into game_sessions(id,user_id,region,build,device_nonce_hash,expires_at) values($1,$2,$3,$4,$5,to_timestamp($6/1000.0))`,[sessionId,parsed.data.userId,parsed.data.region,parsed.data.build,sha256(parsed.data.deviceNonce),expiresAt]);
-  if(redis)await redis.setex(`game-session:${sessionId}`,15*60,JSON.stringify({userId:parsed.data.userId,region:parsed.data.region,build:parsed.data.build,protocol:BACKEND_PROTOCOL_VERSION}));
+  if(redis)await redis.setex(`game-session:${sessionId}`,SESSION_TTL_SECONDS,JSON.stringify({userId:parsed.data.userId,region:parsed.data.region,build:parsed.data.build,protocol:BACKEND_PROTOCOL_VERSION}));
   return reply.code(201).send({sessionId,sessionToken:token,expiresAt:new Date(expiresAt).toISOString(),authority:'authenticated-session',compatibility:compatibilityPayload()});
+});
+
+app.post('/v1/auth/refresh',async(req,reply)=>{
+  const session=requireCompatibleSession(req,reply);if(!session)return;
+  const expiresAt=Date.now()+SESSION_TTL_MS;
+  if(pool){
+    const r=await pool.query(`update game_sessions set expires_at=to_timestamp($3/1000.0) where id=$1 and user_id=$2 and expires_at>now() returning id`,[session.sid,session.uid,expiresAt]);
+    if(!r.rowCount)return reply.code(403).send({error:'session-refresh-denied'});
+  }
+  const token=signSession({...session,exp:expiresAt});
+  if(redis)await redis.setex(`game-session:${session.sid}`,SESSION_TTL_SECONDS,JSON.stringify({userId:session.uid,region:session.region,build:session.build,protocol:session.protocol}));
+  return reply.send({sessionId:session.sid,sessionToken:token,region:session.region,expiresAt:new Date(expiresAt).toISOString(),compatibility:compatibilityPayload()});
 });
 
 const allocationSchema=z.object({region:z.string().min(2).max(16),mode:z.literal('PROTOCOL'),map:z.literal('EMBASSY'),ranked:z.boolean().default(true)});
