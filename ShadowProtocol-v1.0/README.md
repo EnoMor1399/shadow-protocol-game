@@ -3,7 +3,7 @@
 
 **Shadow Protocol** is a tactical first-person shooter development foundation built around intelligence warfare, planning, infiltration, breaching, objective recovery, extraction, and server-authoritative competitive play.
 
-The `ShadowProtocol-v1.0/` directory now carries the **v1.0.1 stability patch** on top of the v1.0 Embassy / Protocol vertical slice. The previous `ShadowProtocol-v0.9/` directory remains preserved as the earlier validated snapshot.
+The `ShadowProtocol-v1.0/` directory carries the **v1.0.1 stability patch** on top of the v1.0 Embassy / Protocol vertical slice. The previous `ShadowProtocol-v0.9/` directory remains preserved as the earlier validated snapshot.
 
 ## What v1.0.1 contains
 
@@ -102,41 +102,61 @@ Existing foundations include server-authoritative Protocol round state, player s
 
 `Backend/` uses TypeScript/Fastify with PostgreSQL, Redis and WebSocket foundations.
 
+For a fresh local backend:
+
 ```bash
 cd Backend
 cp .env.example .env
 npm install
+npm run db:init
 npm run dev
 ```
 
-For local PostgreSQL + Redis:
+For local PostgreSQL + Redis, start the services before `db:init`:
 
 ```bash
 docker compose up -d
 ```
 
-Apply `db/schema.sql` to PostgreSQL before starting persistent services. For an existing or freshly initialized v1.0 database, also apply the v1.0.1 connection-target migration:
+`npm run db:init` applies the base schema and the v1.0.1 connection/admission migration in order. To upgrade an existing v1.0 database without reapplying the full base schema:
 
 ```bash
-psql "$DATABASE_URL" -f db/v101_connection_target.sql
+npm run db:upgrade:v101
 ```
 
-Replace all development secrets before any production deployment.
+Replace every development secret before any production deployment.
 
 The backend protocol is **`0.8.0`** and server-owned compatibility enforcement is active. The default accepted network build is **`SP-1.0.1`**. Authenticated session creation rejects unsupported builds with HTTP `426`, signed sessions carry build/protocol identity, and match allocation validates both values again before reserving a server. `ACCEPTED_NETWORK_BUILDS` may be used for an explicit controlled rollout policy.
 
-Allocation now returns an explicit client connection target. Configure:
+### Dedicated-server connection and admission
+
+Allocation returns a client-connectable target. Configure:
 
 ```bash
 GAME_SERVER_PUBLIC_HOST=your-public-game-server-host
 GAME_SERVER_PUBLIC_PORT=7777
 ```
 
-Development falls back to `127.0.0.1:7777`. **Production does not.** A production allocation without a valid public host/port fails with `503 game-server-connect-target-not-configured` rather than returning unusable connection data. When PostgreSQL is enabled, the selected host and port are persisted on `server_allocations`.
+Development falls back to `127.0.0.1:7777`. **Production does not.** A production allocation without a valid public host/port fails with `503 game-server-connect-target-not-configured` rather than returning unusable connection data.
+
+When PostgreSQL is enabled, each allocation persists its user, server id, target host/port, expiry and a **hash** of the short-lived connect token. The plaintext connect token is returned only to the client connection layer.
+
+Before accepting the connection, the trusted dedicated server must redeem that presented token through:
+
+```text
+POST /v1/matches/admit
+x-match-server-secret: <infrastructure-only secret>
+```
+
+The admission request supplies `allocationId`, `matchId` and the presented `connectToken`. The backend verifies the token hash, allocation/match identity, expiry and unconsumed state atomically. A successful redemption binds the connection to the allocated `userId`, marks the allocation `live`, records `connect_token_consumed_at`, and returns the server/network identity. The same token cannot be replayed; a second redemption is rejected with `403 admission-denied`.
+
+The game client must never contain `MATCH_SERVER_SECRET`. That credential belongs only to backend/dedicated-server infrastructure.
 
 Compatibility metadata is exposed through `/health`, `/v1/compatibility`, authenticated session/allocation responses, reconnect responses and the WebSocket hello payload. Session refresh rotates still-valid 15-minute Bearer sessions; reconnect endpoints enforce session ownership, hashed reconnect tokens and a 90-second reserved-slot deadline. Matchmaking identity/rating/trust are server-owned, and authoritative match telemetry requires the infrastructure-only match-server credential.
 
 ### Backend validation
+
+Fast checks:
 
 ```bash
 cd Backend
@@ -145,7 +165,14 @@ npm run typecheck
 npm run test:compatibility
 ```
 
-The integration suite starts isolated backend instances and validates the compatibility contract, rejection of an old build, signed-session issuance/refresh, Embassy/Protocol allocation with connection host/port, authenticated matchmaking identity, server-only telemetry writes, fail-closed ownership operations without PostgreSQL, and production failure when public game-server routing is not configured. GitHub Actions runs these tests together with browser syntax checks.
+PostgreSQL-backed validation:
+
+```bash
+npm run db:init
+npm run test:postgres
+```
+
+GitHub Actions runs all of the above against a disposable PostgreSQL 16 service. The suite validates build compatibility, session issuance/rotation, production routing failure, authenticated matchmaking, server-only telemetry, allocation persistence, hashed connect tokens, one-time dedicated-server admission/replay rejection, database-owned ready-state, and reserved-slot reconnect recovery.
 
 ## Documentation
 
@@ -162,7 +189,7 @@ Start with:
 
 ## Production validation boundary
 
-Browser syntax and backend TypeScript/security/allocation behavior are validated in GitHub Actions. The Unreal v1.0.1 additions still require a full Unreal Engine environment for Unreal Header Tool validation, C++ compilation, PIE, packaged-client testing and dedicated-server multiplayer testing.
+Browser syntax and backend TypeScript/security/allocation/database behavior are validated in GitHub Actions. The Unreal v1.0.1 additions still require a full Unreal Engine environment for Unreal Header Tool validation, C++ compilation, PIE, packaged-client testing and dedicated-server multiplayer testing.
 
 Production content still to author includes final Embassy geometry, skeletal meshes and first-person arms, animation blueprints, UMG production widgets, Niagara effects, MetaSounds/spatial audio, physical material/destruction profiles, nav meshes, online subsystem integration, anti-cheat integration and 10-client network soak testing.
 
@@ -172,10 +199,10 @@ The next production milestones are:
 1. compile the v1.0.1 Unreal networking additions in UE5.6 and resolve any UHT/compiler-specific issues;
 2. bind ready-room, session-expiry and reconnect UMG widgets to `USPBackendSessionSubsystem` delegates;
 3. implement the trusted platform/account bootstrap that supplies signed game sessions to Unreal;
-4. wire `ConnectHost`, `ConnectPort` and the short-lived connect token into OnlineSubsystem/client travel and dedicated-server admission;
-5. replace the static connection target with a regional healthy-server registry/scheduler;
-6. add disposable-PostgreSQL integration coverage for reconnect ownership/deadline behavior;
+4. wire `ConnectHost`, `ConnectPort` and the short-lived connect token into OnlineSubsystem/client travel;
+5. have the dedicated-server connection handler redeem `/v1/matches/admit` before spawning/possessing the player;
+6. replace the static connection target with a regional healthy-server registry/scheduler;
 7. author the production Embassy map and objective sites;
 8. add final first-person character/weapon animation and spatial audio;
-9. perform real dedicated-server 5v5 replication, token-refresh, reconnect, round-transition and latency testing;
+9. perform real dedicated-server 5v5 replication, token-refresh, admission, reconnect, round-transition and latency testing;
 10. expand from the hardened vertical slice toward Alpha content.
