@@ -93,6 +93,7 @@ struct FSPReconnectResult
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSPCompatibilityChecked, bool, bCompatible, FSPBackendCompatibility, Compatibility);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPAllocationCompleted, FSPMatchAllocation, Allocation);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSPSessionRefreshed, FString, SessionId, FString, ExpiresAt);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FSPReconnectTicketIssued, FString, ReconnectToken, FString, ReconnectDeadline, int32, GraceSeconds);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPReconnectCompleted, FSPReconnectResult, Result);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FSPUpgradeRequired, FString, RequiredBuild, FString, BackendProtocol, FString, Reason);
@@ -100,7 +101,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSPBackendRequestFailed, FString, C
 
 /**
  * Thin client-side bridge for the Shadow Protocol backend compatibility,
- * authenticated allocation and reconnect flow.
+ * authenticated session rotation, allocation and reconnect flow.
  *
  * SECURITY: this subsystem never stores or transmits SESSION_BOOTSTRAP_SECRET.
  * An authenticated game-session token must be supplied by a trusted platform /
@@ -117,6 +118,9 @@ public:
 
     UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Network")
     FSPAllocationCompleted OnAllocationCompleted;
+
+    UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Network")
+    FSPSessionRefreshed OnSessionRefreshed;
 
     UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Network")
     FSPReconnectTicketIssued OnReconnectTicketIssued;
@@ -143,6 +147,9 @@ public:
     void InstallAuthenticatedSession(const FString& InSessionId, const FString& InSessionToken, const FString& InRegion, const FString& InExpiresAt);
 
     UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
+    void RefreshAuthenticatedSession();
+
+    UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
     void ClearAuthenticatedSession();
 
     UFUNCTION(BlueprintPure, Category="Shadow Protocol|Network")
@@ -150,6 +157,9 @@ public:
 
     UFUNCTION(BlueprintPure, Category="Shadow Protocol|Network")
     bool HasVerifiedCompatibility() const { return bCompatibilityVerified; }
+
+    UFUNCTION(BlueprintPure, Category="Shadow Protocol|Network")
+    FString GetSessionExpiresAt() const { return SessionExpiresAt; }
 
     UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
     void AllocateProtocolServer(const FString& Region, bool bRanked = true);
@@ -177,6 +187,7 @@ private:
     bool CanUseAuthenticatedMatchEndpoint(const FString& Context);
     TSharedRef<IHttpRequest, ESPMode::ThreadSafe> CreateAuthenticatedJsonRequest(const FString& Path, const FString& Verb);
     void HandleCompatibilityResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+    void HandleSessionRefreshResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void HandleAllocationResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void HandleReconnectTicketResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void HandleReconnectResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
