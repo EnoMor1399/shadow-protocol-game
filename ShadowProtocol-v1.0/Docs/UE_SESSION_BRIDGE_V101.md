@@ -19,7 +19,7 @@ The Unreal client must **never** contain `SESSION_BOOTSTRAP_SECRET` or `MATCH_SE
 
 `InstallAuthenticatedSession(...)` keeps those values in memory. The subsystem does not persist the Bearer token to config, SaveGame or logs.
 
-`MATCH_SERVER_SECRET` belongs only on trusted dedicated-server/backend infrastructure. Authoritative match telemetry endpoints now reject ordinary game clients that do not present that credential.
+`MATCH_SERVER_SECRET` belongs only on trusted dedicated-server/backend infrastructure. Authoritative match telemetry endpoints reject ordinary game clients that do not present that credential.
 
 ## Client flow
 
@@ -31,8 +31,35 @@ The Unreal client must **never** contain `SESSION_BOOTSTRAP_SECRET` or `MATCH_SE
 6. A trusted identity/platform layer supplies the signed session through `InstallAuthenticatedSession(...)`.
 7. Call `AllocateProtocolServer(region, ranked)`.
 8. The subsystem sends the Bearer session token to `POST /v1/matches/allocate`.
-9. Successful allocation emits `OnAllocationCompleted` with match/server IDs, connect token, tick rate, expiry, network build and backend protocol.
-10. HTTP `426` or an allocation build mismatch emits `OnUpgradeRequired` instead of joining the server.
+9. Successful allocation emits `OnAllocationCompleted` with match/server IDs, connect token, `ConnectHost`, `ConnectPort`, tick rate, expiry, network build and backend protocol.
+10. HTTP `426`, invalid connection metadata or an allocation build mismatch fails closed instead of entering travel.
+
+## Dedicated-server connection handoff
+
+v1.0.1 now has an explicit connection-target contract between allocation and Unreal.
+
+Backend configuration:
+
+- `GAME_SERVER_PUBLIC_HOST`
+- `GAME_SERVER_PUBLIC_PORT`
+
+Development defaults to `127.0.0.1:7777`. Production intentionally has **no implicit localhost fallback**. If either production value is missing or the port is outside `1..65535`, `/v1/matches/allocate` returns `503 game-server-connect-target-not-configured`.
+
+Allocation responses now include:
+
+- `connectHost`
+- `connectPort`
+- `connectToken`
+- `serverId`
+- network/protocol identity and expiry metadata.
+
+`FSPMatchAllocation` exposes `ConnectHost` and `ConnectPort` to Blueprint. `USPBackendSessionSubsystem` verifies both values before broadcasting `OnAllocationCompleted`, preventing UMG/client-travel code from treating an address-less allocation as success.
+
+When PostgreSQL is enabled, the connection target is persisted on `server_allocations`. Existing databases must apply:
+
+`Backend/db/v101_connection_target.sql`
+
+This static host/port configuration is the v1.0.1 handoff contract, not the final regional scheduler. A later allocator should replace it with a real healthy-server registry that selects a ready endpoint by region/build/capacity.
 
 ## Session rotation
 
@@ -50,7 +77,7 @@ Recommended policy: refresh while still comfortably inside the valid window, and
 
 ## Matchmaking trust boundary
 
-`POST /v1/matchmaking/queue` now requires the signed compatible game session. The client submits only latency, party size and region. User identity comes from the signed session, while skill/trust values are read from server-owned database state when PostgreSQL is configured.
+`POST /v1/matchmaking/queue` requires the signed compatible game session. The client submits only latency, party size and region. User identity comes from the signed session, while skill/trust values are read from server-owned database state when PostgreSQL is configured.
 
 Client-supplied `userId`, `skillRating` or `trustScore` fields cannot become authoritative matchmaking identity. Region must match the signed session region.
 
@@ -74,7 +101,7 @@ Bind the ready-room or online-session controller to:
 
 - `OnCompatibilityChecked` — display Verified / Update Required state;
 - `OnSessionRefreshed` — update the displayed/session-controller expiry timer without exposing the Bearer token;
-- `OnAllocationCompleted` — transition to the connection/travel layer using the returned server allocation data;
+- `OnAllocationCompleted` — hand `ConnectHost`, `ConnectPort` and `ConnectToken` to the connection/travel layer;
 - `OnReconnectTicketIssued` — start/update the reconnect countdown and persist the token only in memory;
 - `OnReconnectCompleted` — restore the recovered player slot and resume the connection/travel path;
 - `OnUpgradeRequired` — block matchmaking/reconnect and present required build/protocol details;
@@ -82,13 +109,13 @@ Bind the ready-room or online-session controller to:
 
 Recommended UMG sequence:
 
-**Ready Room → Compatibility → Identity Session → Allocate → Connect → Refresh Session as Needed → Live Match**
+**Ready Room → Compatibility → Identity Session → Allocate → Validated Host/Port → Connect → Refresh Session as Needed → Live Match**
 
 Recovery sequence:
 
 **Transport Loss → Refresh Session if Needed → Reconnect Ticket → Reserved Slot Countdown → Reconnect → Restore Slot → Resume Match**
 
-The subsystem intentionally stops before transport-specific server travel. A connection address or OnlineSubsystem session handle must come from the dedicated-server registry/allocation layer; `serverId` alone must not be guessed into an address.
+The subsystem still stops before transport-specific server travel. It now supplies a backend-owned connection target, but the actual `ClientTravel` / OnlineSubsystem connection step remains the responsibility of the online-session controller and must attach/validate the short-lived connect token according to the dedicated-server admission protocol.
 
 ## Build compatibility behavior
 
@@ -98,7 +125,7 @@ The allocated/reconnected server build is then validated with `USPBuildInfoLibra
 
 ## Dedicated-server authority
 
-The following event families are now guarded by `x-match-server-secret` and must not be authored by public clients:
+The following event families are guarded by `x-match-server-secret` and must not be authored by public clients:
 
 - anti-cheat events;
 - generic match telemetry;
@@ -131,14 +158,14 @@ Primary files:
 
 ## Validation boundary
 
-The browser and backend paths are validated by GitHub Actions, including compatibility/session/allocation, session refresh, authenticated matchmaking identity, dedicated-server telemetry authorization and fail-closed ownership behavior without PostgreSQL. The Unreal bridge has been source-reviewed only in the current environment. It still requires Unreal Header Tool, UE C++ compilation, PIE and packaged-client testing before it can be treated as production-compiled code.
+The browser and backend paths are validated by GitHub Actions, including compatibility/session/allocation, connection-target metadata, production fail-closed routing, session refresh, authenticated matchmaking identity, dedicated-server telemetry authorization and fail-closed ownership behavior without PostgreSQL. The Unreal bridge has been source-reviewed only in the current environment. It still requires Unreal Header Tool, UE C++ compilation, PIE and packaged-client testing before it can be treated as production-compiled code.
 
 ## Next integration tasks
 
 1. Compile the module in Unreal Engine 5.6 and fix any UHT/compiler-specific issues.
 2. Bind ready-room/session-expiry/reconnect UMG widgets to subsystem delegates.
 3. Implement the trusted platform/account bootstrap that supplies the signed game session.
-4. Add the dedicated-server registry/connection address to allocation responses.
-5. Hand successful allocations/reconnects to OnlineSubsystem/client travel.
+4. Implement actual client travel / OnlineSubsystem admission using the returned host, port and short-lived connect token.
+5. Replace the static v1.0.1 connection target with a regional healthy-server registry/scheduler.
 6. Add backend reconnect integration coverage against a disposable PostgreSQL instance.
 7. Run 10-client dedicated-server compatibility, token-refresh, reconnect and round-transition tests.
