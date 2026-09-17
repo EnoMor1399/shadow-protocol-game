@@ -26,6 +26,14 @@ const heartbeatTtlCandidate = Number(process.env.SERVER_HEARTBEAT_TTL_MS ?? 30_0
 const SERVER_HEARTBEAT_TTL_MS = Number.isFinite(heartbeatTtlCandidate)
   ? Math.min(300_000, Math.max(5_000, Math.trunc(heartbeatTtlCandidate)))
   : 30_000;
+const credentialTtlCandidate = Number(process.env.NODE_CREDENTIAL_TTL_MS ?? 21_600_000);
+const NODE_CREDENTIAL_TTL_MS = Number.isFinite(credentialTtlCandidate)
+  ? Math.min(604_800_000, Math.max(300_000, Math.trunc(credentialTtlCandidate)))
+  : 21_600_000;
+const credentialGraceCandidate = Number(process.env.NODE_CREDENTIAL_GRACE_MS ?? 120_000);
+const NODE_CREDENTIAL_GRACE_MS = Number.isFinite(credentialGraceCandidate)
+  ? Math.min(Math.min(600_000, Math.floor(NODE_CREDENTIAL_TTL_MS / 2)), Math.max(5_000, Math.trunc(credentialGraceCandidate)))
+  : 120_000;
 const ACCEPTED_NETWORK_BUILDS = new Set(
   (process.env.ACCEPTED_NETWORK_BUILDS ?? NETWORK_BUILD)
     .split(',')
@@ -50,7 +58,7 @@ const sha256=(value:string)=>createHash('sha256').update(value).digest('hex');
 type SessionPayload={sid:string;uid:string;exp:number;region:string;build:string;protocol:string};
 type ConnectTarget={host:string;port:number};
 type RegisteredServerTarget=ConnectTarget&{nodeId:string;serverId:string;capacity:number;activeAllocations:number};
-type AuthenticatedServerNode={nodeId:string;serverId:string;region:string;networkBuild:string;status:string};
+type AuthenticatedServerNode={nodeId:string;serverId:string;region:string;networkBuild:string;status:string;authSlot:'current'|'previous'};
 function signSession(payload:Record<string,unknown>){
   const encoded=b64url(JSON.stringify(payload));
   const sig=createHmac('sha256',SESSION_SECRET).update(encoded).digest('base64url');
@@ -89,13 +97,23 @@ async function requireNodeCredential(req:any,reply:any):Promise<AuthenticatedSer
   const nodeCredential=String(req.headers['x-sp-node-credential']??'').trim();
   if(!serverId||!nodeCredential){reply.code(401).send({error:'node-auth-required'});return null;}
   if(!pool){reply.code(503).send({error:'database-not-configured'});return null;}
-  const r=await pool.query(`select id as node_id,server_id,region,network_build,status,credential_hash
+  const r=await pool.query(`select id as node_id,server_id,region,network_build,status,credential_hash,credential_expires_at,
+      previous_credential_hash,previous_credential_valid_until
     from game_server_nodes where server_id=$1 and credential_revoked_at is null and status<>'offline'`,[serverId]);
-  if(!r.rowCount||!r.rows[0].credential_hash||!secureHashMatches(String(r.rows[0].credential_hash),nodeCredential)){
-    reply.code(401).send({error:'node-auth-required'});return null;
+  if(!r.rowCount){reply.code(401).send({error:'node-auth-required'});return null;}
+  const node=r.rows[0],now=Date.now();
+  const currentMatches=Boolean(node.credential_hash)&&secureHashMatches(String(node.credential_hash),nodeCredential);
+  if(currentMatches){
+    const expiresAt=node.credential_expires_at?new Date(node.credential_expires_at).getTime():0;
+    if(expiresAt<=now){reply.code(401).send({error:'node-credential-expired'});return null;}
+    return {nodeId:node.node_id,serverId:node.server_id,region:node.region,networkBuild:node.network_build,status:node.status,authSlot:'current'};
   }
-  const node=r.rows[0];
-  return {nodeId:node.node_id,serverId:node.server_id,region:node.region,networkBuild:node.network_build,status:node.status};
+  const previousMatches=Boolean(node.previous_credential_hash)&&secureHashMatches(String(node.previous_credential_hash),nodeCredential);
+  const previousValidUntil=node.previous_credential_valid_until?new Date(node.previous_credential_valid_until).getTime():0;
+  if(previousMatches&&previousValidUntil>now){
+    return {nodeId:node.node_id,serverId:node.server_id,region:node.region,networkBuild:node.network_build,status:node.status,authSlot:'previous'};
+  }
+  reply.code(401).send({error:'node-auth-required'});return null;
 }
 async function requireMatchServer(req:any,reply:any):Promise<boolean>{
   const node=await requireNodeCredential(req,reply);if(!node)return false;
@@ -143,6 +161,7 @@ async function reserveRegisteredServer(client:any,region:string,build:string):Pr
     const r=await client.query(`with candidate as (
       select id from game_server_nodes
       where region=$1 and network_build=$2 and status='ready'
+        and credential_revoked_at is null and credential_expires_at>now()
         and last_heartbeat_at>now()-($3::double precision*interval '1 millisecond')
         and active_allocations<capacity
       order by active_allocations::numeric/nullif(capacity,0),last_heartbeat_at desc,server_id
@@ -163,7 +182,8 @@ async function reserveRegisteredServer(client:any,region:string,build:string):Pr
 
 app.get('/health', async () => ({
   service: 'shadow-protocol-backend', ok: true, version: BACKEND_PROTOCOL_VERSION,
-  serverRegistry: { enabled:Boolean(pool), heartbeatTtlMs:SERVER_HEARTBEAT_TTL_MS, productionRequiresHealthyNode:IS_PRODUCTION },
+  serverRegistry: { enabled:Boolean(pool), heartbeatTtlMs:SERVER_HEARTBEAT_TTL_MS, productionRequiresHealthyNode:IS_PRODUCTION,
+    nodeCredentialTtlMs:NODE_CREDENTIAL_TTL_MS,nodeCredentialGraceMs:NODE_CREDENTIAL_GRACE_MS },
   ...compatibilityPayload()
 }));
 app.get('/v1/compatibility', async () => compatibilityPayload());
@@ -178,15 +198,38 @@ app.post('/v1/servers/register',async(req,reply)=>{
   const parsed=serverRegistrationSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(!pool)return reply.code(503).send({error:'database-not-configured'});
   if(!isBuildCompatible(parsed.data.networkBuild))return reply.code(409).send({error:'server-build-incompatible',receivedBuild:parsed.data.networkBuild,...compatibilityPayload()});
-  const nodeCredential=randomBytes(32).toString('base64url'),credentialHash=sha256(nodeCredential);
-  const r=await pool.query(`insert into game_server_nodes(server_id,region,network_build,public_host,public_port,status,capacity,last_heartbeat_at,credential_hash,credential_issued_at,credential_revoked_at)
-    values($1,$2,$3,$4,$5,'ready',$6,now(),$7,now(),null)
+  const nodeCredential=randomBytes(32).toString('base64url'),credentialHash=sha256(nodeCredential),credentialExpiresAt=Date.now()+NODE_CREDENTIAL_TTL_MS;
+  const r=await pool.query(`insert into game_server_nodes(server_id,region,network_build,public_host,public_port,status,capacity,last_heartbeat_at,credential_hash,credential_issued_at,credential_expires_at,credential_revoked_at,previous_credential_hash,previous_credential_valid_until)
+    values($1,$2,$3,$4,$5,'ready',$6,now(),$7,now(),to_timestamp($8/1000.0),null,null,null)
     on conflict(server_id) do update set region=excluded.region,network_build=excluded.network_build,public_host=excluded.public_host,
       public_port=excluded.public_port,capacity=excluded.capacity,status='ready',last_heartbeat_at=now(),credential_hash=excluded.credential_hash,
-      credential_issued_at=now(),credential_revoked_at=null,updated_at=now()
-    returning id as node_id,server_id,region,network_build,public_host,public_port,status,capacity,active_allocations,last_heartbeat_at`,
-    [parsed.data.serverId,parsed.data.region,parsed.data.networkBuild,parsed.data.publicHost,parsed.data.publicPort,parsed.data.capacity,credentialHash]);
-  return reply.send({...r.rows[0],heartbeatTtlMs:SERVER_HEARTBEAT_TTL_MS,nodeCredential});
+      credential_issued_at=now(),credential_expires_at=excluded.credential_expires_at,credential_revoked_at=null,
+      previous_credential_hash=null,previous_credential_valid_until=null,updated_at=now()
+    returning id as node_id,server_id,region,network_build,public_host,public_port,status,capacity,active_allocations,last_heartbeat_at,credential_expires_at`,
+    [parsed.data.serverId,parsed.data.region,parsed.data.networkBuild,parsed.data.publicHost,parsed.data.publicPort,parsed.data.capacity,credentialHash,credentialExpiresAt]);
+  return reply.send({...r.rows[0],heartbeatTtlMs:SERVER_HEARTBEAT_TTL_MS,nodeCredential,credentialTtlMs:NODE_CREDENTIAL_TTL_MS,
+    credentialGraceMs:NODE_CREDENTIAL_GRACE_MS,credentialExpiresAt:new Date(credentialExpiresAt).toISOString()});
+});
+
+const serverRotateCredentialSchema=z.object({serverId:z.string().min(2).max(64)});
+app.post('/v1/servers/rotate-credential',async(req,reply)=>{
+  const node=await requireNodeCredential(req,reply);if(!node)return;
+  const parsed=serverRotateCredentialSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
+  if(parsed.data.serverId!==node.serverId)return reply.code(403).send({error:'node-identity-mismatch'});
+  if(node.authSlot!=='current')return reply.code(409).send({error:'node-credential-already-rotated'});
+  const suppliedCredential=String(req.headers['x-sp-node-credential']??'');
+  const suppliedHash=sha256(suppliedCredential);
+  const nodeCredential=randomBytes(32).toString('base64url'),credentialHash=sha256(nodeCredential);
+  const credentialExpiresAt=Date.now()+NODE_CREDENTIAL_TTL_MS,previousValidUntil=Date.now()+NODE_CREDENTIAL_GRACE_MS;
+  const r=await pool!.query(`update game_server_nodes
+    set previous_credential_hash=credential_hash,previous_credential_valid_until=to_timestamp($4/1000.0),
+        credential_hash=$2,credential_issued_at=now(),credential_expires_at=to_timestamp($3/1000.0),updated_at=now()
+    where id=$1 and credential_hash=$5 and credential_revoked_at is null
+    returning server_id,credential_expires_at,previous_credential_valid_until`,
+    [node.nodeId,credentialHash,credentialExpiresAt,previousValidUntil,suppliedHash]);
+  if(!r.rowCount)return reply.code(409).send({error:'node-credential-rotation-raced'});
+  return reply.send({serverId:node.serverId,nodeCredential,credentialTtlMs:NODE_CREDENTIAL_TTL_MS,
+    credentialExpiresAt:new Date(credentialExpiresAt).toISOString(),previousCredentialValidUntil:new Date(previousValidUntil).toISOString()});
 });
 
 const serverHeartbeatSchema=z.object({serverId:z.string().min(2).max(64),status:z.enum(['ready','draining']).optional()});
@@ -195,7 +238,7 @@ app.post('/v1/servers/heartbeat',async(req,reply)=>{
   const parsed=serverHeartbeatSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(!pool)return reply.code(503).send({error:'database-not-configured'});
   const r=await pool.query(`update game_server_nodes set last_heartbeat_at=now(),status=coalesce($2,status),updated_at=now()
-    where server_id=$1 returning server_id,region,network_build,status,capacity,active_allocations,last_heartbeat_at`,[parsed.data.serverId,parsed.data.status??null]);
+    where server_id=$1 returning server_id,region,network_build,status,capacity,active_allocations,last_heartbeat_at,credential_expires_at`,[parsed.data.serverId,parsed.data.status??null]);
   if(!r.rowCount)return reply.code(404).send({error:'server-node-not-registered'});
   return reply.send(r.rows[0]);
 });

@@ -62,6 +62,8 @@ before(async () => {
       SERVER_REGISTRATION_SECRET,
       ACCEPTED_NETWORK_BUILDS: 'SP-1.0.1',
       SERVER_HEARTBEAT_TTL_MS: '30000',
+      NODE_CREDENTIAL_TTL_MS: '600000',
+      NODE_CREDENTIAL_GRACE_MS: '30000',
       GAME_SERVER_PUBLIC_HOST: '',
       GAME_SERVER_PUBLIC_PORT: ''
     },
@@ -100,7 +102,11 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   });
   assert.equal(primaryRegistration.status, 200);
   const primaryNode = await primaryRegistration.json();
-  assert.ok(primaryNode.nodeCredential.length >= 32);
+  assert.ok(primaryCredential.length >= 32);
+  assert.equal(primaryNode.credentialTtlMs, 600000);
+  assert.equal(primaryNode.credentialGraceMs, 30000);
+  assert.ok(Date.parse(primaryNode.credentialExpiresAt) > Date.now());
+  let primaryCredential = primaryCredential;
 
   const drainRegistration = await bootstrapPost('/v1/servers/register', {
     serverId: 'ACC-DRAIN',
@@ -179,7 +185,7 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   const primaryLoad = await db.query(`select active_allocations,credential_hash from game_server_nodes where server_id=$1`, [PRIMARY_SERVER_ID]);
   assert.equal(Number(primaryLoad.rows[0].active_allocations), 1);
   assert.ok(primaryLoad.rows[0].credential_hash);
-  assert.notEqual(primaryLoad.rows[0].credential_hash, primaryNode.nodeCredential);
+  assert.notEqual(primaryLoad.rows[0].credential_hash, primaryCredential);
 
   const saturatedResponse = await fetch(`${BASE_URL}/v1/matches/allocate`, {
     method: 'POST',
@@ -189,6 +195,37 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   assert.equal(saturatedResponse.status, 503);
   const saturated = await saturatedResponse.json();
   assert.equal(saturated.error, 'no-healthy-game-server');
+
+  const credentialBeforeRotation = primaryCredential;
+  const rotateResponse = await nodePost('/v1/servers/rotate-credential', { serverId: PRIMARY_SERVER_ID }, PRIMARY_SERVER_ID, primaryCredential);
+  assert.equal(rotateResponse.status, 200);
+  const rotated = await rotateResponse.json();
+  assert.ok(rotated.nodeCredential.length >= 32);
+  assert.notEqual(rotated.nodeCredential, credentialBeforeRotation);
+  assert.equal(rotated.credentialTtlMs, 600000);
+  assert.ok(Date.parse(rotated.credentialExpiresAt) > Date.now());
+  assert.ok(Date.parse(rotated.previousCredentialValidUntil) > Date.now());
+
+  const oldCredentialGraceHeartbeat = await nodePost('/v1/servers/heartbeat', { serverId: PRIMARY_SERVER_ID, status: 'ready' }, PRIMARY_SERVER_ID, credentialBeforeRotation);
+  assert.equal(oldCredentialGraceHeartbeat.status, 200);
+
+  primaryCredential = rotated.nodeCredential;
+  const rotatedCredentialHeartbeat = await nodePost('/v1/servers/heartbeat', { serverId: PRIMARY_SERVER_ID, status: 'ready' }, PRIMARY_SERVER_ID, primaryCredential);
+  assert.equal(rotatedCredentialHeartbeat.status, 200);
+
+  const credentialState = await db.query(`select credential_hash,credential_expires_at,previous_credential_hash,previous_credential_valid_until
+    from game_server_nodes where server_id=$1`, [PRIMARY_SERVER_ID]);
+  assert.notEqual(credentialState.rows[0].credential_hash, primaryCredential);
+  assert.notEqual(credentialState.rows[0].previous_credential_hash, credentialBeforeRotation);
+  assert.ok(credentialState.rows[0].previous_credential_hash);
+  assert.ok(new Date(credentialState.rows[0].credential_expires_at).getTime() > Date.now());
+
+  await db.query(`update game_server_nodes set previous_credential_valid_until=now()-interval '1 second' where server_id=$1`, [PRIMARY_SERVER_ID]);
+  const expiredOldCredential = await nodePost('/v1/servers/heartbeat', { serverId: PRIMARY_SERVER_ID, status: 'ready' }, PRIMARY_SERVER_ID, credentialBeforeRotation);
+  assert.equal(expiredOldCredential.status, 401);
+
+  const staleRotation = await nodePost('/v1/servers/rotate-credential', { serverId: PRIMARY_SERVER_ID }, PRIMARY_SERVER_ID, credentialBeforeRotation);
+  assert.equal(staleRotation.status, 401);
 
   const admissionBody = {
     allocationId: allocation.allocationId,
@@ -207,9 +244,9 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   assert.equal(bootstrapAdmission.status, 401);
   const crossNodeAdmission = await nodePost('/v1/matches/admit', admissionBody, 'ACC-DRAIN', drainNode.nodeCredential);
   assert.equal(crossNodeAdmission.status, 403);
-  const deniedAdmission = await nodePost('/v1/matches/admit', { ...admissionBody, connectToken: 'wrong-token-value-that-is-long-enough' }, PRIMARY_SERVER_ID, primaryNode.nodeCredential);
+  const deniedAdmission = await nodePost('/v1/matches/admit', { ...admissionBody, connectToken: 'wrong-token-value-that-is-long-enough' }, PRIMARY_SERVER_ID, primaryCredential);
   assert.equal(deniedAdmission.status, 403);
-  const admissionResponse = await nodePost('/v1/matches/admit', admissionBody, PRIMARY_SERVER_ID, primaryNode.nodeCredential);
+  const admissionResponse = await nodePost('/v1/matches/admit', admissionBody, PRIMARY_SERVER_ID, primaryCredential);
   assert.equal(admissionResponse.status, 200);
   const admission = await admissionResponse.json();
   assert.equal(admission.admitted, true);
@@ -219,7 +256,7 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   assert.equal(admission.networkBuild, 'SP-1.0.1');
   assert.equal(admission.authority, 'dedicated-server');
 
-  const replayAdmission = await nodePost('/v1/matches/admit', admissionBody, PRIMARY_SERVER_ID, primaryNode.nodeCredential);
+  const replayAdmission = await nodePost('/v1/matches/admit', admissionBody, PRIMARY_SERVER_ID, primaryCredential);
   assert.equal(replayAdmission.status, 403);
 
   const consumedAllocation = await db.query(
@@ -239,11 +276,11 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
     spawnGroup: 'ALPHA',
     connectionState: 'connected',
     ready: false
-  }, PRIMARY_SERVER_ID, primaryNode.nodeCredential);
+  }, PRIMARY_SERVER_ID, primaryCredential);
   assert.equal(slotResponse.status, 202);
   const crossNodeTelemetry = await nodePost('/v1/anti-cheat/events', { matchId: allocation.matchId, userId: TEST_USER_ID, signal: 'integration-cross-node', severity: 1, evidence: {} }, 'ACC-DRAIN', drainNode.nodeCredential);
   assert.equal(crossNodeTelemetry.status, 403);
-  const ownedTelemetry = await nodePost('/v1/anti-cheat/events', { matchId: allocation.matchId, userId: TEST_USER_ID, signal: 'integration-owned-node', severity: 1, evidence: {} }, PRIMARY_SERVER_ID, primaryNode.nodeCredential);
+  const ownedTelemetry = await nodePost('/v1/anti-cheat/events', { matchId: allocation.matchId, userId: TEST_USER_ID, signal: 'integration-owned-node', severity: 1, evidence: {} }, PRIMARY_SERVER_ID, primaryCredential);
   assert.equal(ownedTelemetry.status, 202);
 
   const readyResponse = await fetch(`${BASE_URL}/v1/matches/ready-state`, {
@@ -327,7 +364,7 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
     allocationId: allocation.allocationId,
     matchId: allocation.matchId,
     outcome: 'closed'
-  }, PRIMARY_SERVER_ID, primaryNode.nodeCredential);
+  }, PRIMARY_SERVER_ID, primaryCredential);
   assert.equal(releaseResponse.status, 200);
   const release = await releaseResponse.json();
   assert.equal(release.released, true);
