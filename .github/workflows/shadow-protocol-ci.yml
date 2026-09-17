@@ -24,7 +24,7 @@ jobs:
         run: node --check ShadowProtocol-v1.0/PrototypeWeb/v1.js
 
   backend-typecheck:
-    name: Backend TypeScript
+    name: Backend TypeScript + compatibility
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -40,3 +40,5 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Typecheck backend
         run: npm run typecheck
+      - name: Test build compatibility handshake
+        run: npm run test:compatibility
