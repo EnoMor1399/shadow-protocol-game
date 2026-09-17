@@ -30,6 +30,8 @@ Added `USPBackendSessionSubsystem` as the Unreal client bridge for the backend c
 - Blueprint/UMG delegates for verified, upgrade-required, allocation-success, session-refresh, reconnect and request-failure states;
 - in-memory installation of a signed game-session token supplied by a trusted identity/platform layer;
 - Bearer-authenticated Embassy / Protocol server allocation;
+- Blueprint-visible `ConnectHost` / `ConnectPort` plus connect token on successful allocation;
+- client-side rejection of allocation responses without a valid host/port target;
 - authenticated `/v1/auth/refresh` token rotation for matches longer than the initial 15-minute session lifetime;
 - reserved-slot reconnect ticket + reconnect completion flows;
 - allocation/reconnect build validation before handing connection data to the travel layer;
@@ -39,7 +41,7 @@ Added `USPBackendSessionSubsystem` as the Unreal client bridge for the backend c
 
 ## Backend protocol 0.8.0
 
-The Fastify backend now enforces v1.0.1 build identity and explicit trust boundaries across authentication, matchmaking and authoritative match services.
+The Fastify backend now enforces v1.0.1 build identity and explicit trust boundaries across authentication, matchmaking, allocation and authoritative match services.
 
 - Backend package/protocol advances from `0.7.0` to `0.8.0`.
 - Required network build defaults to `SP-1.0.1`.
@@ -48,14 +50,17 @@ The Fastify backend now enforces v1.0.1 build identity and explicit trust bounda
 - Session tokens bind the authenticated user to `build`, region and backend `protocol`.
 - `/v1/auth/refresh` rotates a still-valid compatible session and extends PostgreSQL/Redis expiry when configured.
 - Match allocation re-validates the signed build/protocol before reserving a server and persists the session network build as `server_build`.
-- Matchmaking now requires the signed compatible session; the client no longer controls authoritative `userId`, skill rating or trust score.
+- Allocation returns `connectHost`, `connectPort` and a short-lived connect token; configured targets are persisted with `server_allocations` when PostgreSQL is enabled.
+- Development may use `127.0.0.1:7777`; production has no localhost fallback and returns `503 game-server-connect-target-not-configured` when routing configuration is absent or invalid.
+- Existing PostgreSQL deployments apply `Backend/db/v101_connection_target.sql` to add the allocation connection-target columns.
+- Matchmaking requires the signed compatible session; the client no longer controls authoritative `userId`, skill rating or trust score.
 - Matchmaking region must match the signed session region; skill/trust are read from server-owned database state when PostgreSQL is configured.
-- `MATCH_SERVER_SECRET` now gates anti-cheat, match telemetry, round results, tactical equipment, player slots, fortification, ballistic, kill-feed, overtime, environment/combat and tactical-interaction writes.
+- `MATCH_SERVER_SECRET` gates anti-cheat, match telemetry, round results, tactical equipment, player slots, fortification, ballistic, kill-feed, overtime, environment/combat and tactical-interaction writes.
 - Reconnect ticket issuance and reconnect completion enforce signed compatibility and database-backed slot ownership.
 - Ready-state and reconnect mutations fail closed when PostgreSQL is unavailable because ownership cannot be proven safely.
 - `/health`, `/v1/compatibility`, allocation/reconnect responses and WebSocket hello messages expose the active release/network/protocol identity.
 
-This makes compatibility, matchmaking identity and authoritative event ownership server-controlled rather than client-asserted.
+This makes compatibility, matchmaking identity, connection routing and authoritative event ownership server-controlled rather than client-asserted.
 
 ## CI and integration validation
 
@@ -63,13 +68,14 @@ GitHub Actions runs:
 
 - browser JavaScript syntax checks for `game.js` and `v1.js`;
 - strict backend TypeScript typecheck;
-- an executable backend integration suite that boots Fastify without PostgreSQL/Redis and verifies:
+- executable backend integration tests that boot Fastify and verify:
   - compatibility metadata;
   - rejection of `SP-0.9.0` before session issuance;
   - signed `SP-1.0.1` session creation;
   - authenticated session refresh/rotation;
-  - Embassy / Protocol server allocation;
-  - authenticated matchmaking identity that ignores spoofed client identity/rating/trust fields;
+  - Embassy / Protocol server allocation with `connectHost` / `connectPort`;
+  - production allocation fails closed when public server routing is not configured;
+  - authenticated matchmaking identity ignores spoofed client identity/rating/trust fields;
   - rejection of public-client authoritative match telemetry;
   - acceptance of the same telemetry with the dedicated-server credential;
   - fail-closed reconnect/ready-state ownership behavior when PostgreSQL is unavailable.
