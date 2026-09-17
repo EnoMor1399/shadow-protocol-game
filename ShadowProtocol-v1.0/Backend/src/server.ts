@@ -19,6 +19,9 @@ const CONTENT_REVISION = 'EMBASSY-PROTOCOL-101';
 const BACKEND_PROTOCOL_VERSION = '0.8.0';
 const SESSION_TTL_MS = 15 * 60_000;
 const SESSION_TTL_SECONDS = Math.floor(SESSION_TTL_MS / 1000);
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const GAME_SERVER_PUBLIC_HOST = (process.env.GAME_SERVER_PUBLIC_HOST ?? (IS_PRODUCTION ? '' : '127.0.0.1')).trim();
+const GAME_SERVER_PUBLIC_PORT = Number(process.env.GAME_SERVER_PUBLIC_PORT ?? (IS_PRODUCTION ? '0' : '7777'));
 const ACCEPTED_NETWORK_BUILDS = new Set(
   (process.env.ACCEPTED_NETWORK_BUILDS ?? NETWORK_BUILD)
     .split(',')
@@ -41,6 +44,7 @@ const MATCH_SERVER_SECRET = process.env.MATCH_SERVER_SECRET ?? 'dev-match-secret
 const b64url=(value:string|Buffer)=>Buffer.from(value).toString('base64url');
 const sha256=(value:string)=>createHash('sha256').update(value).digest('hex');
 type SessionPayload={sid:string;uid:string;exp:number;region:string;build:string;protocol:string};
+type ConnectTarget={host:string;port:number};
 function signSession(payload:Record<string,unknown>){
   const encoded=b64url(JSON.stringify(payload));
   const sig=createHmac('sha256',SESSION_SECRET).update(encoded).digest('base64url');
@@ -73,6 +77,13 @@ function requireCompatibleSession(req:any, reply:any):SessionPayload|null{
   if(!session){reply.code(401).send({error:'invalid-game-session'});return null;}
   if(!isBuildCompatible(session.build)||session.protocol!==BACKEND_PROTOCOL_VERSION){incompatibleBuild(reply,session.build);return null;}
   return session;
+}
+function requireConnectTarget(reply:any):ConnectTarget|null{
+  if(!GAME_SERVER_PUBLIC_HOST||!Number.isInteger(GAME_SERVER_PUBLIC_PORT)||GAME_SERVER_PUBLIC_PORT<1||GAME_SERVER_PUBLIC_PORT>65535){
+    reply.code(503).send({error:'game-server-connect-target-not-configured'});
+    return null;
+  }
+  return {host:GAME_SERVER_PUBLIC_HOST,port:GAME_SERVER_PUBLIC_PORT};
 }
 
 app.get('/health', async () => ({ service: 'shadow-protocol-backend', ok: true, version: BACKEND_PROTOCOL_VERSION, ...compatibilityPayload() }));
@@ -108,13 +119,14 @@ app.post('/v1/matches/allocate',async(req,reply)=>{
   const session=requireCompatibleSession(req,reply);if(!session)return;
   const parsed=allocationSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(parsed.data.region!==session.region)return reply.code(409).send({error:'session-region-mismatch'});
+  const connectTarget=requireConnectTarget(reply);if(!connectTarget)return;
   const allocationId=crypto.randomUUID(),matchId=crypto.randomUUID(),serverId=`${parsed.data.region.toUpperCase()}-${randomBytes(2).toString('hex').toUpperCase()}`;
   const connectToken=randomBytes(24).toString('base64url'),connectHash=sha256(connectToken),expiresAt=Date.now()+120_000;
   if(pool){
     await pool.query(`insert into matches(id,mode,map_code,region,ranked,server_build) values($1,$2,$3,$4,$5,$6)`,[matchId,parsed.data.mode,parsed.data.map,parsed.data.region,parsed.data.ranked,session.build]);
-    await pool.query(`insert into server_allocations(id,match_id,server_id,region,status,connect_token_hash,expires_at) values($1,$2,$3,$4,'reserved',$5,to_timestamp($6/1000.0))`,[allocationId,matchId,serverId,parsed.data.region,connectHash,expiresAt]);
+    await pool.query(`insert into server_allocations(id,match_id,server_id,region,status,connect_token_hash,connect_host,connect_port,expires_at) values($1,$2,$3,$4,'reserved',$5,$6,$7,to_timestamp($8/1000.0))`,[allocationId,matchId,serverId,parsed.data.region,connectHash,connectTarget.host,connectTarget.port,expiresAt]);
   }
-  return reply.code(201).send({allocationId,matchId,serverId,region:parsed.data.region,tickRate:60,connectToken,expiresAt:new Date(expiresAt).toISOString(),networkBuild:session.build,backendProtocol:BACKEND_PROTOCOL_VERSION});
+  return reply.code(201).send({allocationId,matchId,serverId,region:parsed.data.region,tickRate:60,connectToken,connectHost:connectTarget.host,connectPort:connectTarget.port,expiresAt:new Date(expiresAt).toISOString(),networkBuild:session.build,backendProtocol:BACKEND_PROTOCOL_VERSION});
 });
 
 const queueSchema = z.object({
