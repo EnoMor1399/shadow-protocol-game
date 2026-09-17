@@ -72,7 +72,7 @@ after(async () => {
   if (db) await db.end();
 });
 
-test('persists allocation target and completes authenticated ready/reconnect lifecycle', async () => {
+test('persists allocation target, redeems admission once, and completes ready/reconnect lifecycle', async () => {
   const sessionResponse = await fetch(`${BASE_URL}/v1/auth/game-session`, {
     method: 'POST',
     headers: {
@@ -104,15 +104,73 @@ test('persists allocation target and completes authenticated ready/reconnect lif
   assert.equal(allocation.connectPort, GAME_SERVER_PORT);
 
   const persistedAllocation = await db.query(
-    `select connect_host,connect_port,connect_token_hash,status
+    `select user_id,connect_host,connect_port,connect_token_hash,connect_token_consumed_at,status
      from server_allocations where id=$1`,
     [allocation.allocationId]
   );
   assert.equal(persistedAllocation.rowCount, 1);
+  assert.equal(persistedAllocation.rows[0].user_id, TEST_USER_ID);
   assert.equal(persistedAllocation.rows[0].connect_host, GAME_SERVER_HOST);
   assert.equal(Number(persistedAllocation.rows[0].connect_port), GAME_SERVER_PORT);
   assert.equal(persistedAllocation.rows[0].status, 'reserved');
+  assert.equal(persistedAllocation.rows[0].connect_token_consumed_at, null);
   assert.notEqual(persistedAllocation.rows[0].connect_token_hash, allocation.connectToken);
+
+  const admissionBody = {
+    allocationId: allocation.allocationId,
+    matchId: allocation.matchId,
+    connectToken: allocation.connectToken
+  };
+
+  const publicAdmission = await fetch(`${BASE_URL}/v1/matches/admit`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(admissionBody)
+  });
+  assert.equal(publicAdmission.status, 401);
+
+  const deniedAdmission = await fetch(`${BASE_URL}/v1/matches/admit`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-match-server-secret': MATCH_SERVER_SECRET
+    },
+    body: JSON.stringify({ ...admissionBody, connectToken: 'wrong-token-value-that-is-long-enough' })
+  });
+  assert.equal(deniedAdmission.status, 403);
+
+  const admissionResponse = await fetch(`${BASE_URL}/v1/matches/admit`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-match-server-secret': MATCH_SERVER_SECRET
+    },
+    body: JSON.stringify(admissionBody)
+  });
+  assert.equal(admissionResponse.status, 200);
+  const admission = await admissionResponse.json();
+  assert.equal(admission.admitted, true);
+  assert.equal(admission.userId, TEST_USER_ID);
+  assert.equal(admission.matchId, allocation.matchId);
+  assert.equal(admission.networkBuild, 'SP-1.0.1');
+  assert.equal(admission.authority, 'dedicated-server');
+
+  const replayAdmission = await fetch(`${BASE_URL}/v1/matches/admit`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-match-server-secret': MATCH_SERVER_SECRET
+    },
+    body: JSON.stringify(admissionBody)
+  });
+  assert.equal(replayAdmission.status, 403);
+
+  const consumedAllocation = await db.query(
+    `select status,connect_token_consumed_at from server_allocations where id=$1`,
+    [allocation.allocationId]
+  );
+  assert.equal(consumedAllocation.rows[0].status, 'live');
+  assert.ok(consumedAllocation.rows[0].connect_token_consumed_at);
 
   const slotResponse = await fetch(`${BASE_URL}/v1/matches/player-slots`, {
     method: 'POST',
