@@ -89,11 +89,12 @@ v1.0 introduced:
 
 v1.0.1 adds:
 - `USPBuildInfoLibrary` — shared release version, network build id, content revision and exact-match compatibility helpers for Blueprint/C++ session integration;
-- `USPBackendSessionSubsystem` — GameInstance-scoped HTTP/JSON bridge for compatibility checks, authenticated Embassy/Protocol allocation, update-required handling and reserved-slot reconnect;
-- Blueprint delegates for compatibility, allocation, reconnect-ticket, reconnect-complete, upgrade-required and request-failure UI states;
-- in-memory session/reconnect token handling with no privileged bootstrap secret embedded in the shipped client.
+- `USPBackendSessionSubsystem` — GameInstance-scoped HTTP/JSON bridge for compatibility checks, signed-session rotation, authenticated Embassy/Protocol allocation, update-required handling and reserved-slot reconnect;
+- Blueprint delegates for compatibility, session refresh, allocation, reconnect-ticket, reconnect-complete, upgrade-required and request-failure UI states;
+- Blueprint-visible allocation `ConnectHost`, `ConnectPort` and connect-token data with client-side validation before allocation success;
+- in-memory session/reconnect token handling with no privileged bootstrap or match-server secret embedded in the shipped client.
 
-`ShadowProtocol.Build.cs` now includes `HTTP`, `Json` and `JsonUtilities` for the backend bridge.
+`ShadowProtocol.Build.cs` includes `HTTP`, `Json` and `JsonUtilities` for the backend bridge.
 
 Existing foundations include server-authoritative Protocol round state, player slots, authenticated sessions, weapons, health/injuries, lag-compensation hooks, tactical equipment, intelligence nodes, alert state, fortification, doors/security devices, observer rules and competitive scoring.
 
@@ -114,11 +115,26 @@ For local PostgreSQL + Redis:
 docker compose up -d
 ```
 
-Apply `db/schema.sql` to PostgreSQL before starting persistent services. Replace all development secrets before any production deployment.
+Apply `db/schema.sql` to PostgreSQL before starting persistent services. For an existing or freshly initialized v1.0 database, also apply the v1.0.1 connection-target migration:
+
+```bash
+psql "$DATABASE_URL" -f db/v101_connection_target.sql
+```
+
+Replace all development secrets before any production deployment.
 
 The backend protocol is **`0.8.0`** and server-owned compatibility enforcement is active. The default accepted network build is **`SP-1.0.1`**. Authenticated session creation rejects unsupported builds with HTTP `426`, signed sessions carry build/protocol identity, and match allocation validates both values again before reserving a server. `ACCEPTED_NETWORK_BUILDS` may be used for an explicit controlled rollout policy.
 
-Compatibility metadata is exposed through `/health`, `/v1/compatibility`, authenticated session/allocation responses, reconnect responses and the WebSocket hello payload. Reconnect endpoints enforce session ownership, hashed reconnect tokens and a 90-second reserved-slot deadline.
+Allocation now returns an explicit client connection target. Configure:
+
+```bash
+GAME_SERVER_PUBLIC_HOST=your-public-game-server-host
+GAME_SERVER_PUBLIC_PORT=7777
+```
+
+Development falls back to `127.0.0.1:7777`. **Production does not.** A production allocation without a valid public host/port fails with `503 game-server-connect-target-not-configured` rather than returning unusable connection data. When PostgreSQL is enabled, the selected host and port are persisted on `server_allocations`.
+
+Compatibility metadata is exposed through `/health`, `/v1/compatibility`, authenticated session/allocation responses, reconnect responses and the WebSocket hello payload. Session refresh rotates still-valid 15-minute Bearer sessions; reconnect endpoints enforce session ownership, hashed reconnect tokens and a 90-second reserved-slot deadline. Matchmaking identity/rating/trust are server-owned, and authoritative match telemetry requires the infrastructure-only match-server credential.
 
 ### Backend validation
 
@@ -129,7 +145,7 @@ npm run typecheck
 npm run test:compatibility
 ```
 
-The compatibility test starts the backend without PostgreSQL/Redis and validates the public compatibility contract, rejection of an old build, issuance of an `SP-1.0.1` signed session and successful Embassy/Protocol allocation. GitHub Actions runs this test together with strict TypeScript and browser syntax checks.
+The integration suite starts isolated backend instances and validates the compatibility contract, rejection of an old build, signed-session issuance/refresh, Embassy/Protocol allocation with connection host/port, authenticated matchmaking identity, server-only telemetry writes, fail-closed ownership operations without PostgreSQL, and production failure when public game-server routing is not configured. GitHub Actions runs these tests together with browser syntax checks.
 
 ## Documentation
 
@@ -146,7 +162,7 @@ Start with:
 
 ## Production validation boundary
 
-Browser syntax and the backend TypeScript/compatibility handshake are validated in GitHub Actions. The Unreal v1.0.1 additions still require a full Unreal Engine environment for Unreal Header Tool validation, C++ compilation, PIE, packaged-client testing and dedicated-server multiplayer testing.
+Browser syntax and backend TypeScript/security/allocation behavior are validated in GitHub Actions. The Unreal v1.0.1 additions still require a full Unreal Engine environment for Unreal Header Tool validation, C++ compilation, PIE, packaged-client testing and dedicated-server multiplayer testing.
 
 Production content still to author includes final Embassy geometry, skeletal meshes and first-person arms, animation blueprints, UMG production widgets, Niagara effects, MetaSounds/spatial audio, physical material/destruction profiles, nav meshes, online subsystem integration, anti-cheat integration and 10-client network soak testing.
 
@@ -154,11 +170,12 @@ Production content still to author includes final Embassy geometry, skeletal mes
 
 The next production milestones are:
 1. compile the v1.0.1 Unreal networking additions in UE5.6 and resolve any UHT/compiler-specific issues;
-2. bind ready-room and reconnect UMG widgets to `USPBackendSessionSubsystem` delegates;
+2. bind ready-room, session-expiry and reconnect UMG widgets to `USPBackendSessionSubsystem` delegates;
 3. implement the trusted platform/account bootstrap that supplies signed game sessions to Unreal;
-4. add dedicated-server registry/connection-address data to allocation and wire successful allocations to OnlineSubsystem/client travel;
-5. add disposable-PostgreSQL integration coverage for reconnect ownership/deadline behavior;
-6. author the production Embassy map and objective sites;
-7. add final first-person character/weapon animation and spatial audio;
-8. perform real dedicated-server 5v5 replication, reconnect, round-transition and latency testing;
-9. expand from the hardened vertical slice toward Alpha content.
+4. wire `ConnectHost`, `ConnectPort` and the short-lived connect token into OnlineSubsystem/client travel and dedicated-server admission;
+5. replace the static connection target with a regional healthy-server registry/scheduler;
+6. add disposable-PostgreSQL integration coverage for reconnect ownership/deadline behavior;
+7. author the production Embassy map and objective sites;
+8. add final first-person character/weapon animation and spatial audio;
+9. perform real dedicated-server 5v5 replication, token-refresh, reconnect, round-transition and latency testing;
+10. expand from the hardened vertical slice toward Alpha content.
