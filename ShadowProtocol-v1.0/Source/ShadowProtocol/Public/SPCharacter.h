@@ -10,6 +10,7 @@ class USPTacticalEquipmentComponent;
 class ASPBarricade;
 class USPLagCompensationComponent;
 class USPCombatFeedbackComponent;
+class USPCoverSystemComponent;
 
 UCLASS()
 class SHADOWPROTOCOL_API ASPCharacter : public ACharacter
@@ -24,6 +25,7 @@ public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly) TObjectPtr<USPTacticalEquipmentComponent> TacticalEquipment;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly) TObjectPtr<USPLagCompensationComponent> LagCompensation;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly) TObjectPtr<USPCombatFeedbackComponent> CombatFeedback;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly) TObjectPtr<USPCoverSystemComponent> CoverSystem;
     UPROPERTY(Replicated, BlueprintReadOnly) TObjectPtr<ASPWeaponBase> EquippedWeapon;
     UPROPERTY(Replicated, BlueprintReadOnly) bool bSilentMovement = false;
     UPROPERTY(Replicated, BlueprintReadOnly) bool bAiming = false;
@@ -55,5 +57,6 @@ protected:
     void BeginAim(); void EndAim(); void BeginSprint(); void EndSprint();
     void CycleEquipment(); void ThrowEquipment(); void CycleSquadOrder(); void Fortify();
     void BeginLeanLeft(); void EndLeanLeft(); void BeginLeanRight(); void EndLeanRight(); void Vault(); void CycleOptic(); void InspectWeapon();
+    void UpdateCoverStateAuthority();
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 };
