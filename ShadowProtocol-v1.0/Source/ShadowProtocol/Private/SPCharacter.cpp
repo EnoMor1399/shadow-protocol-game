@@ -6,6 +6,7 @@
 #include "SPPlayerState.h"
 #include "SPLagCompensationComponent.h"
 #include "SPCombatFeedbackComponent.h"
+#include "SPCoverSystemComponent.h"
 #include "GameFramework/GameStateBase.h"
 #include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -19,6 +20,7 @@ ASPCharacter::ASPCharacter()
     TacticalEquipment = CreateDefaultSubobject<USPTacticalEquipmentComponent>(TEXT("TacticalEquipment"));
     LagCompensation = CreateDefaultSubobject<USPLagCompensationComponent>(TEXT("LagCompensation"));
     CombatFeedback = CreateDefaultSubobject<USPCombatFeedbackComponent>(TEXT("CombatFeedback"));
+    CoverSystem = CreateDefaultSubobject<USPCoverSystemComponent>(TEXT("CoverSystem"));
     GetCharacterMovement()->MaxWalkSpeed = 420.f;
     GetCharacterMovement()->MaxWalkSpeedCrouched = 180.f;
 }
@@ -77,7 +79,25 @@ void ASPCharacter::EndLeanRight(){ LeanAlpha=0.f; ServerSetLean(0.f); }
 void ASPCharacter::Vault(){ ServerVault(); }
 void ASPCharacter::CycleOptic(){ ServerCycleOptic(); }
 void ASPCharacter::InspectWeapon(){ if(!bSprinting) BP_InspectWeapon(); }
-void ASPCharacter::ServerSetLean_Implementation(float Value){ LeanAlpha=FMath::Clamp(Value,-1.f,1.f); }
+
+void ASPCharacter::UpdateCoverStateAuthority()
+{
+    if(!HasAuthority() || !CoverSystem || !GetWorld()) return;
+    const FVector Start=GetActorLocation()+FVector(0,0,62.f);
+    const FVector End=Start+GetActorForwardVector()*92.f;
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(SPCoverProbe),false,this);
+    FHitResult Hit;
+    const bool bHit=GetWorld()->LineTraceSingleByChannel(Hit,Start,End,ECC_Visibility,Params);
+    if(bHit) CoverSystem->ServerSetCoverState(true,Hit.ImpactNormal);
+    else CoverSystem->ServerSetCoverState(false,FVector::ZeroVector);
+}
+
+void ASPCharacter::ServerSetLean_Implementation(float Value)
+{
+    LeanAlpha=FMath::Clamp(Value,-1.f,1.f);
+    UpdateCoverStateAuthority();
+    if(CoverSystem) CoverSystem->ServerSetPeekAlpha(LeanAlpha);
+}
 void ASPCharacter::ServerCycleOptic_Implementation(){ OpticMode=OpticMode==ESPOpticMode::Reflex1x?ESPOpticMode::Magnifier2x:ESPOpticMode::Reflex1x; }
 void ASPCharacter::ServerVault_Implementation(){
     if(bVaulting || bSprinting) return;
