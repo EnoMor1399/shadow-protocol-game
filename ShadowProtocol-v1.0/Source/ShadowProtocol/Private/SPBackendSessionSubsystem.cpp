@@ -13,6 +13,14 @@ bool ParseJsonObject(const FString& JsonText, TSharedPtr<FJsonObject>& OutObject
     const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonText);
     return FJsonSerializer::Deserialize(Reader, OutObject) && OutObject.IsValid();
 }
+
+FString SerializeJson(const TSharedRef<FJsonObject>& Payload)
+{
+    FString Body;
+    const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Body);
+    FJsonSerializer::Serialize(Payload, Writer);
+    return Body;
+}
 }
 
 void USPBackendSessionSubsystem::SetBackendBaseUrl(const FString& InBaseUrl)
@@ -39,6 +47,34 @@ FString USPBackendSessionSubsystem::BuildUrl(const FString& Path) const
     return BackendBaseUrl + TEXT("/") + Path;
 }
 
+bool USPBackendSessionSubsystem::CanUseAuthenticatedMatchEndpoint(const FString& Context)
+{
+    if (!bCompatibilityVerified)
+    {
+        OnRequestFailed.Broadcast(Context, TEXT("Compatibility must be verified before using authenticated match services."));
+        return false;
+    }
+
+    if (!HasAuthenticatedSession())
+    {
+        OnRequestFailed.Broadcast(Context, TEXT("An authenticated game session is required."));
+        return false;
+    }
+
+    return true;
+}
+
+TSharedRef<IHttpRequest, ESPMode::ThreadSafe> USPBackendSessionSubsystem::CreateAuthenticatedJsonRequest(const FString& Path, const FString& Verb)
+{
+    const TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
+    Request->SetURL(BuildUrl(Path));
+    Request->SetVerb(Verb);
+    Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+    Request->SetHeader(TEXT("Accept"), TEXT("application/json"));
+    Request->SetHeader(TEXT("Authorization"), TEXT("Bearer ") + SessionToken);
+    return Request;
+}
+
 void USPBackendSessionSubsystem::CheckCompatibility()
 {
     bCompatibilityVerified = false;
@@ -55,7 +91,7 @@ void USPBackendSessionSubsystem::CheckCompatibility()
     }
 }
 
-void USPBackendSessionSubsystem::HandleCompatibilityResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful)
+void USPBackendSessionSubsystem::HandleCompatibilityResponse(FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
 {
     if (!bWasSuccessful || !Response.IsValid())
     {
@@ -152,15 +188,8 @@ void USPBackendSessionSubsystem::ClearAuthenticatedSession()
 
 void USPBackendSessionSubsystem::AllocateProtocolServer(const FString& Region, bool bRanked)
 {
-    if (!bCompatibilityVerified)
+    if (!CanUseAuthenticatedMatchEndpoint(TEXT("allocation")))
     {
-        OnRequestFailed.Broadcast(TEXT("allocation"), TEXT("Compatibility must be verified before server allocation."));
-        return;
-    }
-
-    if (!HasAuthenticatedSession())
-    {
-        OnRequestFailed.Broadcast(TEXT("allocation"), TEXT("An authenticated game session is required before server allocation."));
         return;
     }
 
@@ -185,17 +214,8 @@ void USPBackendSessionSubsystem::AllocateProtocolServer(const FString& Region, b
     Payload->SetStringField(TEXT("map"), TEXT("EMBASSY"));
     Payload->SetBoolField(TEXT("ranked"), bRanked);
 
-    FString Body;
-    const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Body);
-    FJsonSerializer::Serialize(Payload, Writer);
-
-    const TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
-    Request->SetURL(BuildUrl(TEXT("/v1/matches/allocate")));
-    Request->SetVerb(TEXT("POST"));
-    Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
-    Request->SetHeader(TEXT("Accept"), TEXT("application/json"));
-    Request->SetHeader(TEXT("Authorization"), TEXT("Bearer ") + SessionToken);
-    Request->SetContentAsString(Body);
+    const TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = CreateAuthenticatedJsonRequest(TEXT("/v1/matches/allocate"), TEXT("POST"));
+    Request->SetContentAsString(SerializeJson(Payload));
     Request->OnProcessRequestComplete().BindUObject(this, &USPBackendSessionSubsystem::HandleAllocationResponse);
 
     if (!Request->ProcessRequest())
@@ -204,7 +224,7 @@ void USPBackendSessionSubsystem::AllocateProtocolServer(const FString& Region, b
     }
 }
 
-void USPBackendSessionSubsystem::HandleAllocationResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful)
+void USPBackendSessionSubsystem::HandleAllocationResponse(FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
 {
     if (!bWasSuccessful || !Response.IsValid())
     {
@@ -263,6 +283,185 @@ void USPBackendSessionSubsystem::HandleAllocationResponse(FHttpRequestPtr Reques
     }
 
     OnAllocationCompleted.Broadcast(Allocation);
+}
+
+void USPBackendSessionSubsystem::RequestReconnectTicket(const FString& MatchId, int32 RoundNumber, int32 SlotIndex)
+{
+    if (!CanUseAuthenticatedMatchEndpoint(TEXT("reconnect-ticket")))
+    {
+        return;
+    }
+
+    if (MatchId.IsEmpty() || RoundNumber < 1 || RoundNumber > 9 || SlotIndex < 0 || SlotIndex > 9)
+    {
+        OnRequestFailed.Broadcast(TEXT("reconnect-ticket"), TEXT("Reconnect ticket request contains invalid match, round or slot data."));
+        return;
+    }
+
+    const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+    Payload->SetStringField(TEXT("matchId"), MatchId);
+    Payload->SetNumberField(TEXT("roundNumber"), RoundNumber);
+    Payload->SetNumberField(TEXT("slotIndex"), SlotIndex);
+
+    const TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = CreateAuthenticatedJsonRequest(TEXT("/v1/matches/reconnect-ticket"), TEXT("POST"));
+    Request->SetContentAsString(SerializeJson(Payload));
+    Request->OnProcessRequestComplete().BindUObject(this, &USPBackendSessionSubsystem::HandleReconnectTicketResponse);
+
+    if (!Request->ProcessRequest())
+    {
+        OnRequestFailed.Broadcast(TEXT("reconnect-ticket"), TEXT("Unable to start reconnect ticket request."));
+    }
+}
+
+void USPBackendSessionSubsystem::HandleReconnectTicketResponse(FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
+{
+    if (!bWasSuccessful || !Response.IsValid())
+    {
+        BroadcastHttpFailure(TEXT("reconnect-ticket"), Response, bWasSuccessful);
+        return;
+    }
+
+    TSharedPtr<FJsonObject> JsonObject;
+    const bool bParsedJson = ParseJsonObject(Response->GetContentAsString(), JsonObject);
+    const int32 StatusCode = Response->GetResponseCode();
+
+    if (StatusCode == 426)
+    {
+        HandleUpgradeResponse(JsonObject, TEXT("Backend rejected reconnect because the client build is no longer compatible."));
+        return;
+    }
+
+    if (StatusCode < 200 || StatusCode >= 300)
+    {
+        BroadcastHttpFailure(TEXT("reconnect-ticket"), Response, bWasSuccessful);
+        return;
+    }
+
+    if (!bParsedJson || !JsonObject.IsValid())
+    {
+        OnRequestFailed.Broadcast(TEXT("reconnect-ticket"), TEXT("Backend returned invalid reconnect ticket JSON."));
+        return;
+    }
+
+    FString ReconnectToken;
+    FString ReconnectDeadline;
+    FString NetworkBuild;
+    FString BackendProtocol;
+    double GraceSeconds = 0.0;
+    JsonObject->TryGetStringField(TEXT("reconnectToken"), ReconnectToken);
+    JsonObject->TryGetStringField(TEXT("reconnectDeadline"), ReconnectDeadline);
+    JsonObject->TryGetStringField(TEXT("networkBuild"), NetworkBuild);
+    JsonObject->TryGetStringField(TEXT("backendProtocol"), BackendProtocol);
+    JsonObject->TryGetNumberField(TEXT("graceSeconds"), GraceSeconds);
+
+    if (ReconnectToken.IsEmpty() || ReconnectDeadline.IsEmpty())
+    {
+        OnRequestFailed.Broadcast(TEXT("reconnect-ticket"), TEXT("Reconnect ticket response is missing token or deadline data."));
+        return;
+    }
+
+    if (!NetworkBuild.IsEmpty() && !USPBuildInfoLibrary::IsNetworkBuildCompatible(NetworkBuild, true))
+    {
+        OnUpgradeRequired.Broadcast(NetworkBuild, BackendProtocol, TEXT("Reconnect reservation targets an incompatible network build."));
+        return;
+    }
+
+    OnReconnectTicketIssued.Broadcast(ReconnectToken, ReconnectDeadline, FMath::RoundToInt(GraceSeconds));
+}
+
+void USPBackendSessionSubsystem::ReconnectToReservedSlot(const FString& MatchId, int32 RoundNumber, int32 SlotIndex, const FString& ReconnectToken)
+{
+    if (!CanUseAuthenticatedMatchEndpoint(TEXT("reconnect")))
+    {
+        return;
+    }
+
+    if (MatchId.IsEmpty() || RoundNumber < 1 || RoundNumber > 9 || SlotIndex < 0 || SlotIndex > 9 || ReconnectToken.IsEmpty())
+    {
+        OnRequestFailed.Broadcast(TEXT("reconnect"), TEXT("Reconnect request contains invalid match, round, slot or token data."));
+        return;
+    }
+
+    const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+    Payload->SetStringField(TEXT("matchId"), MatchId);
+    Payload->SetNumberField(TEXT("roundNumber"), RoundNumber);
+    Payload->SetNumberField(TEXT("slotIndex"), SlotIndex);
+    Payload->SetStringField(TEXT("reconnectToken"), ReconnectToken);
+
+    const TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = CreateAuthenticatedJsonRequest(TEXT("/v1/matches/reconnect"), TEXT("POST"));
+    Request->SetContentAsString(SerializeJson(Payload));
+    Request->OnProcessRequestComplete().BindUObject(this, &USPBackendSessionSubsystem::HandleReconnectResponse);
+
+    if (!Request->ProcessRequest())
+    {
+        OnRequestFailed.Broadcast(TEXT("reconnect"), TEXT("Unable to start reconnect request."));
+    }
+}
+
+void USPBackendSessionSubsystem::HandleReconnectResponse(FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
+{
+    if (!bWasSuccessful || !Response.IsValid())
+    {
+        BroadcastHttpFailure(TEXT("reconnect"), Response, bWasSuccessful);
+        return;
+    }
+
+    TSharedPtr<FJsonObject> JsonObject;
+    const bool bParsedJson = ParseJsonObject(Response->GetContentAsString(), JsonObject);
+    const int32 StatusCode = Response->GetResponseCode();
+
+    if (StatusCode == 426)
+    {
+        HandleUpgradeResponse(JsonObject, TEXT("Backend rejected reconnect because the client build is no longer compatible."));
+        return;
+    }
+
+    if (StatusCode < 200 || StatusCode >= 300)
+    {
+        BroadcastHttpFailure(TEXT("reconnect"), Response, bWasSuccessful);
+        return;
+    }
+
+    if (!bParsedJson || !JsonObject.IsValid())
+    {
+        OnRequestFailed.Broadcast(TEXT("reconnect"), TEXT("Backend returned invalid reconnect JSON."));
+        return;
+    }
+
+    FSPReconnectResult Result;
+    JsonObject->TryGetBoolField(TEXT("reconnected"), Result.bReconnected);
+    JsonObject->TryGetStringField(TEXT("networkBuild"), Result.NetworkBuild);
+    JsonObject->TryGetStringField(TEXT("backendProtocol"), Result.BackendProtocol);
+
+    if (JsonObject->HasTypedField<EJson::Object>(TEXT("slot")))
+    {
+        const TSharedPtr<FJsonObject> SlotObject = JsonObject->GetObjectField(TEXT("slot"));
+        if (SlotObject.IsValid())
+        {
+            double SlotIndex = -1.0;
+            if (SlotObject->TryGetNumberField(TEXT("slot_index"), SlotIndex))
+            {
+                Result.SlotIndex = FMath::RoundToInt(SlotIndex);
+            }
+            SlotObject->TryGetStringField(TEXT("user_id"), Result.UserId);
+            SlotObject->TryGetStringField(TEXT("team"), Result.Team);
+            SlotObject->TryGetStringField(TEXT("spawn_group"), Result.SpawnGroup);
+        }
+    }
+
+    if (!Result.bReconnected)
+    {
+        OnRequestFailed.Broadcast(TEXT("reconnect"), TEXT("Backend response did not confirm reconnection."));
+        return;
+    }
+
+    if (!Result.NetworkBuild.IsEmpty() && !USPBuildInfoLibrary::IsNetworkBuildCompatible(Result.NetworkBuild, true))
+    {
+        OnUpgradeRequired.Broadcast(Result.NetworkBuild, Result.BackendProtocol, TEXT("Reconnected slot targets an incompatible network build."));
+        return;
+    }
+
+    OnReconnectCompleted.Broadcast(Result);
 }
 
 void USPBackendSessionSubsystem::BroadcastHttpFailure(const FString& Context, FHttpResponsePtr Response, bool bWasSuccessful)
