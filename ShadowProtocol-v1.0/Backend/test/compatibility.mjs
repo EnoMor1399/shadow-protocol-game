@@ -6,6 +6,8 @@ const PORT = 18081;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const BOOTSTRAP_SECRET = 'ci-bootstrap-secret';
 const MATCH_SERVER_SECRET = 'ci-match-server-secret';
+const GAME_SERVER_HOST = '127.0.0.1';
+const GAME_SERVER_PORT = 7777;
 const TEST_USER_ID = '11111111-1111-4111-8111-111111111111';
 const SPOOFED_USER_ID = '22222222-2222-4222-8222-222222222222';
 const TEST_MATCH_ID = '33333333-3333-4333-8333-333333333333';
@@ -58,7 +60,9 @@ before(async () => {
       SESSION_SIGNING_SECRET: 'ci-session-signing-secret',
       SESSION_BOOTSTRAP_SECRET: BOOTSTRAP_SECRET,
       MATCH_SERVER_SECRET,
-      ACCEPTED_NETWORK_BUILDS: 'SP-1.0.1'
+      ACCEPTED_NETWORK_BUILDS: 'SP-1.0.1',
+      GAME_SERVER_PUBLIC_HOST: GAME_SERVER_HOST,
+      GAME_SERVER_PUBLIC_PORT: String(GAME_SERVER_PORT)
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -116,7 +120,7 @@ test('refreshes an authenticated compatible game session', async () => {
   assert.equal(refreshed.compatibility.backendProtocol, '0.8.0');
 });
 
-test('issues and allocates an authenticated SP-1.0.1 session', async () => {
+test('issues and allocates an authenticated SP-1.0.1 session with a connection target', async () => {
   const session = await getValidSession();
   assert.ok(session.sessionId);
   assert.ok(session.sessionToken);
@@ -138,6 +142,8 @@ test('issues and allocates an authenticated SP-1.0.1 session', async () => {
   assert.ok(allocation.matchId);
   assert.ok(allocation.serverId);
   assert.ok(allocation.connectToken);
+  assert.equal(allocation.connectHost, GAME_SERVER_HOST);
+  assert.equal(allocation.connectPort, GAME_SERVER_PORT);
   assert.equal(allocation.networkBuild, 'SP-1.0.1');
   assert.equal(allocation.backendProtocol, '0.8.0');
   assert.equal(allocation.tickRate, 60);
