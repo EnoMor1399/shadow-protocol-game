@@ -42,3 +42,39 @@ jobs:
         run: npm run typecheck
       - name: Test build compatibility handshake
         run: npm run test:compatibility
+
+  backend-postgres-integration:
+    name: Backend PostgreSQL allocation + reconnect
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: shadow
+          POSTGRES_PASSWORD: shadow
+          POSTGRES_DB: shadow_protocol
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://shadow:shadow@127.0.0.1:5432/shadow_protocol
+    defaults:
+      run:
+        working-directory: ShadowProtocol-v1.0/Backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ShadowProtocol-v1.0/Backend/package.json
+      - name: Install backend dependencies
+        run: npm install --no-audit --no-fund
+      - name: Initialize v1.0.1 PostgreSQL schema
+        run: npm run db:init
+      - name: Test persisted allocation and reconnect lifecycle
+        run: npm run test:postgres
