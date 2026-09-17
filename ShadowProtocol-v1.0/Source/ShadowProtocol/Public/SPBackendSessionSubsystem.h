@@ -5,6 +5,8 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "SPBackendSessionSubsystem.generated.h"
 
+class FJsonObject;
+
 USTRUCT(BlueprintType)
 struct FSPBackendCompatibility
 {
@@ -127,12 +129,13 @@ private:
     FString SessionRegion;
     FString SessionExpiresAt;
     bool bCompatibilityVerified = false;
+    bool bPendingRankedAllocation = true;
     FSPBackendCompatibility LastCompatibility;
 
     FString BuildUrl(const FString& Path) const;
     void HandleCompatibilityResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void HandleAllocationResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
-    void BroadcastHttpFailure(const FString& Context, FHttpResponsePtr Response, bool bWasSuccessful) const;
+    void BroadcastHttpFailure(const FString& Context, FHttpResponsePtr Response, bool bWasSuccessful);
     bool ParseCompatibility(const TSharedPtr<FJsonObject>& JsonObject, FSPBackendCompatibility& OutCompatibility) const;
     void HandleUpgradeResponse(const TSharedPtr<FJsonObject>& JsonObject, const FString& FallbackReason);
 };
