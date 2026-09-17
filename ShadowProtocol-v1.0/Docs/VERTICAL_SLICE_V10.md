@@ -9,7 +9,7 @@ The v1.0 browser build keeps the validated v0.9 simulation and adds a production
 New presentation systems include:
 - professional settings and keybind screen;
 - persistent HUD-density preference;
-- optional enhanced-contrast and reduced-motion presentation modes;
+- enhanced-contrast and reduced-motion presentation modes;
 - optional network-telemetry visibility;
 - F1 HUD-density shortcut and Escape settings access;
 - objective-site confirmation ribbon when verified SIGINT reveals ARCHIVE-A, VAULT-B, or SAFE-C;
@@ -21,10 +21,10 @@ The existing v0.9 simulation remains responsible for movement, ADS, sprint/endur
 
 ## Unreal production additions
 ### `USPCoverSystemComponent`
-Replicated cover state for the owning character. The server owns whether the player is considered in cover, the normalized cover surface normal, and the current peek amount. `ASPCharacter` now creates this component and performs an authority-side forward cover trace when lean state changes.
+Replicated cover state for the owning character. The server owns whether the player is considered in cover, the normalized cover surface normal, and the current peek amount. `ASPCharacter` creates this component and performs an authority-side forward cover trace when lean state changes.
 
-### `ASPObjectiveSiteActor`
-Authorable and replicated objective-site identity. Each site carries a `SiteId`, human-readable display name, Embassy zone, and server-owned active-site state. Blueprint presentation can react through `BP_OnObjectiveSiteStateChanged`.
+### Enhanced `ASPObjectiveSite`
+The existing Protocol objective-site actor remains the single authoritative site class. v1.0 extends it with replicated `SiteId`, display name, Embassy zone, replicated active-site notification, and `BP_OnObjectiveSiteStateChanged`. `ASPProtocolGameMode::SelectObjectiveSiteForRound()` continues to rotate the authoritative active site and set `ActiveObjectiveSiteId` in game state.
 
 ### `ASPDeploymentDirector`
 Replicated deployment state for Authentication → Loadout Check → Insertion → Live. Spawn groups are constrained to ALPHA, BRAVO, or CHARLIE before the sequence begins.
@@ -33,4 +33,4 @@ Replicated deployment state for Authentication → Loadout Check → Insertion �
 The client may request presentation or movement intent, but competitive truth remains server-owned. Objective activation, cover state, deployment phase, combat resolution, player state, and match state must not depend on untrusted client-only values in ranked production.
 
 ## Remaining production gates
-v1.0 still requires Unreal Engine 5 compilation/UHT validation, production Embassy geometry, animation blueprints, first-person arms/weapon assets, UMG implementation of the browser UX, Niagara/MetaSounds, nav-mesh authoring, online-subsystem integration, packaged dedicated-server builds, ten-client soak tests, latency/packet-loss testing, anti-cheat integration, and final content/performance optimization.
+v1.0 still requires Unreal Engine 5 compilation/UHT validation, production Embassy geometry, animation blueprints, skeletal meshes, material/destruction profiles, Niagara effects, MetaSounds/spatial audio, UMG implementation of the browser UX, nav-mesh authoring, online-subsystem integration, packaged dedicated-server builds, ten-client soak tests, latency/packet-loss testing, anti-cheat integration, and final content/performance optimization.
