@@ -148,3 +148,15 @@ See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flo
 - The no-database path fails authoritative server writes closed because node ownership cannot be proven.
 - PostgreSQL integration coverage includes bootstrap-only rejection, cross-node admission/telemetry/release rejection, credential hashing and owned-node success.
 - `USPDedicatedServerBackendSubsystem` stores the returned node credential only in dedicated-server memory and automatically uses it after registration.
+
+
+## Expiring node credential rotation
+
+- Adds `v101_node_credential_rotation.sql`.
+- Adds `NODE_CREDENTIAL_TTL_MS` (default 6h) and `NODE_CREDENTIAL_GRACE_MS` (default 2m).
+- Scheduler excludes nodes whose current credential has expired.
+- Adds `POST /v1/servers/rotate-credential`, authenticated by the current node credential.
+- Rotation stores the old credential hash only for a bounded overlap window so in-flight requests survive rotation.
+- Previous credentials cannot rotate again; expired credentials must recover through trusted registration.
+- PostgreSQL integration tests validate new/old credential overlap, new-token authority, old-token expiry and stale-token rotation rejection.
+- Unreal dedicated-server bridge schedules automatic rotation at roughly 75% of TTL and can recover registration after ambiguous credential-auth failures without exposing either credential.

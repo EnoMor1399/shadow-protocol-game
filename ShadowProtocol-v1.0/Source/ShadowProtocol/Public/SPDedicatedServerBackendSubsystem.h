@@ -33,6 +33,15 @@ struct FSPDedicatedServerRegistration
 
     UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
     int32 HeartbeatTtlMs = 0;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    FString CredentialExpiresAt;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    int32 CredentialTtlMs = 0;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    int32 CredentialGraceMs = 0;
 };
 
 USTRUCT(BlueprintType)
@@ -70,6 +79,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FSPDedicatedServerHeartbeat, FStr
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPDedicatedServerAdmissionCompleted, FSPDedicatedServerAdmission, Admission);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FSPDedicatedServerAllocationReleased, FString, AllocationId, FString, MatchId, FString, Status, int32, ActiveAllocations);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPDedicatedServerDrainChanged, bool, bDraining);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPDedicatedServerCredentialRotated, FString, CredentialExpiresAt);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSPDedicatedServerBackendFailed, FString, Context, FString, ErrorMessage);
 
 /**
@@ -106,9 +116,12 @@ public:
     FSPDedicatedServerDrainChanged OnDrainChanged;
 
     UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Dedicated Server")
+    FSPDedicatedServerCredentialRotated OnCredentialRotated;
+
+    UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Dedicated Server")
     FSPDedicatedServerBackendFailed OnRequestFailed;
 
-    /** Reads non-secret routing configuration from command-line arguments and the secret from MATCH_SERVER_SECRET. */
+    /** Reads non-secret routing configuration from command-line arguments and the registration bootstrap secret from the process environment. */
     bool ConfigureFromRuntime();
 
     UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Dedicated Server")
@@ -116,6 +129,9 @@ public:
 
     UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Dedicated Server")
     void SendHeartbeat();
+
+    UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Dedicated Server")
+    void RotateNodeCredential();
 
     UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Dedicated Server")
     void MarkDraining();
@@ -154,19 +170,27 @@ private:
     bool bConfigured = false;
     bool bRegistered = false;
     bool bDraining = false;
+    bool bRestoreDrainAfterRegistration = false;
     float HeartbeatIntervalSeconds = 10.0f;
+    float CredentialRotationDelaySeconds = 0.0f;
     FDelegateHandle HeartbeatTickerHandle;
+    FDelegateHandle CredentialRotationTickerHandle;
 
     FString BuildUrl(const FString& Path) const;
     bool HasRequiredConfiguration() const;
     TSharedRef<IHttpRequest, ESPMode::ThreadSafe> CreateInfrastructureJsonRequest(const FString& Path, const FString& Verb) const;
     bool TickHeartbeat(float DeltaSeconds);
+    bool TickCredentialRotation(float DeltaSeconds);
     void StartHeartbeat(int32 HeartbeatTtlMs);
     void StopHeartbeat();
+    void StartCredentialRotation(int32 CredentialTtlMs);
+    void StopCredentialRotation();
+    void RecoverNodeRegistration();
     void SendBestEffortShutdownDrain();
 
     void HandleRegistrationResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void HandleHeartbeatResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+    void HandleCredentialRotationResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void HandleDrainResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void HandleAdmissionResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void HandleReleaseResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);

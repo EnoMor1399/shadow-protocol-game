@@ -181,3 +181,17 @@ The dedicated-server trust boundary now separates registration bootstrap from no
 - Heartbeat, drain, admission, allocation release and authoritative match writes send `x-sp-server-id` plus `x-sp-node-credential`.
 - Match-scoped calls are checked against `server_allocations.node_id`, so another registered node cannot admit, release or write telemetry for a match it does not own.
 - Existing registry rows without node credentials are marked `offline` by the migration and must re-register before scheduling.
+
+
+## Expiry and zero-downtime rotation
+
+Node credentials are now time-bounded. The backend defaults are:
+
+- `NODE_CREDENTIAL_TTL_MS=21600000` (6 hours)
+- `NODE_CREDENTIAL_GRACE_MS=120000` (2 minutes)
+
+The backend clamps unsafe values, excludes expired nodes from new scheduling immediately, and rejects an expired current credential. `POST /v1/servers/rotate-credential` requires the current node credential and rotates to a new random secret while retaining the previous hash only for the bounded grace window. Previous credentials can finish in-flight trusted requests during that window but cannot perform another rotation.
+
+`USPDedicatedServerBackendSubsystem` schedules rotation at approximately 75% of the issued TTL. The plaintext replacement credential remains in dedicated-server memory only. If rotation transport fails, the subsystem retries before expiry; if authentication indicates an uncertain/lost rotation response, it re-registers through the bootstrap channel. A draining node restores drain state after registration recovery so credential recovery does not intentionally return it to the ready pool.
+
+The migration `v101_node_credential_rotation.sql` adds current expiry plus previous-credential hash/grace metadata and gives existing credentialed nodes a bounded migration expiry.

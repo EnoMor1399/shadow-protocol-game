@@ -241,3 +241,10 @@ The next production milestones are:
 The shared server secret is now registration-bootstrap material only. Set `SERVER_REGISTRATION_SECRET` on trusted server/orchestrator infrastructure; `MATCH_SERVER_SECRET` remains a deprecated migration fallback for v1.0.1.
 
 Successful registration rotates a random per-node credential and persists only its SHA-256 hash. Heartbeat, drain, admission, release and authoritative match writes use `x-sp-server-id` plus `x-sp-node-credential`. Match-scoped operations are verified against `server_allocations.node_id`, so a credential for one node cannot operate on another node's allocation. The v1.0.1 migration chain now also applies `Backend/db/v101_node_credentials.sql`.
+
+
+### Expiring node credentials
+
+Per-node credentials are time-bounded rather than permanent. The default policy is a 6-hour credential TTL with a 2-minute previous-credential overlap window. Dedicated servers rotate through `POST /v1/servers/rotate-credential` before expiry. The allocator refuses expired nodes immediately, while the short overlap allows in-flight requests signed with the previous credential to finish without extending that credential's authority indefinitely.
+
+The Unreal dedicated-server bridge schedules rotation at about 75% of the issued lifetime and keeps both bootstrap and node credentials out of Blueprint/event payloads. `v101_node_credential_rotation.sql` is included in both fresh initialization and the v1.0.1 upgrade chain.

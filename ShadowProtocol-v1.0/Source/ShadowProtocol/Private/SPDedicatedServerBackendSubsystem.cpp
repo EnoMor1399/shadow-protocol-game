@@ -51,6 +51,7 @@ void USPDedicatedServerBackendSubsystem::Initialize(FSubsystemCollectionBase& Co
 void USPDedicatedServerBackendSubsystem::Deinitialize()
 {
     StopHeartbeat();
+    StopCredentialRotation();
     SendBestEffortShutdownDrain();
     RegistrationSecret.Empty();
     NodeCredential.Empty();
@@ -158,6 +159,8 @@ void USPDedicatedServerBackendSubsystem::RegisterNode()
         return;
     }
 
+    StopCredentialRotation();
+
     const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
     Payload->SetStringField(TEXT("serverId"), ServerId);
     Payload->SetStringField(TEXT("region"), Region);
@@ -198,16 +201,23 @@ void USPDedicatedServerBackendSubsystem::HandleRegistrationResponse(FHttpRequest
     JsonObject->TryGetStringField(TEXT("network_build"), Registration.NetworkBuild);
     JsonObject->TryGetStringField(TEXT("status"), Registration.Status);
     JsonObject->TryGetStringField(TEXT("nodeCredential"), NodeCredential);
+    JsonObject->TryGetStringField(TEXT("credentialExpiresAt"), Registration.CredentialExpiresAt);
 
     double CapacityValue = 0.0;
     double ActiveAllocationsValue = 0.0;
     double HeartbeatTtlValue = 0.0;
+    double CredentialTtlValue = 0.0;
+    double CredentialGraceValue = 0.0;
     JsonObject->TryGetNumberField(TEXT("capacity"), CapacityValue);
     JsonObject->TryGetNumberField(TEXT("active_allocations"), ActiveAllocationsValue);
     JsonObject->TryGetNumberField(TEXT("heartbeatTtlMs"), HeartbeatTtlValue);
+    JsonObject->TryGetNumberField(TEXT("credentialTtlMs"), CredentialTtlValue);
+    JsonObject->TryGetNumberField(TEXT("credentialGraceMs"), CredentialGraceValue);
     Registration.Capacity = FMath::RoundToInt(CapacityValue);
     Registration.ActiveAllocations = FMath::RoundToInt(ActiveAllocationsValue);
     Registration.HeartbeatTtlMs = FMath::RoundToInt(HeartbeatTtlValue);
+    Registration.CredentialTtlMs = FMath::RoundToInt(CredentialTtlValue);
+    Registration.CredentialGraceMs = FMath::RoundToInt(CredentialGraceValue);
 
     if (Registration.ServerId.IsEmpty() || Registration.NodeId.IsEmpty() || NodeCredential.IsEmpty())
     {
@@ -215,9 +225,19 @@ void USPDedicatedServerBackendSubsystem::HandleRegistrationResponse(FHttpRequest
         return;
     }
 
+    const bool bRestoreDrain = bRestoreDrainAfterRegistration;
+    bRestoreDrainAfterRegistration = false;
     bRegistered = true;
-    bDraining = Registration.Status.Equals(TEXT("draining"), ESearchCase::IgnoreCase);
-    StartHeartbeat(Registration.HeartbeatTtlMs);
+    bDraining = false;
+    StartCredentialRotation(Registration.CredentialTtlMs);
+    if (bRestoreDrain)
+    {
+        MarkDraining();
+    }
+    else
+    {
+        StartHeartbeat(Registration.HeartbeatTtlMs);
+    }
     OnRegistered.Broadcast(Registration);
 }
 
@@ -246,6 +266,44 @@ void USPDedicatedServerBackendSubsystem::StopHeartbeat()
     }
 }
 
+void USPDedicatedServerBackendSubsystem::StartCredentialRotation(int32 CredentialTtlMs)
+{
+    StopCredentialRotation();
+
+    if (!bRegistered || NodeCredential.IsEmpty())
+    {
+        return;
+    }
+
+    const float TtlSeconds = CredentialTtlMs > 0 ? static_cast<float>(CredentialTtlMs) / 1000.0f : 21600.0f;
+    CredentialRotationDelaySeconds = FMath::Max(30.0f, TtlSeconds * 0.75f);
+    CredentialRotationTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
+        FTickerDelegate::CreateUObject(this, &USPDedicatedServerBackendSubsystem::TickCredentialRotation),
+        CredentialRotationDelaySeconds);
+}
+
+void USPDedicatedServerBackendSubsystem::StopCredentialRotation()
+{
+    if (CredentialRotationTickerHandle.IsValid())
+    {
+        FTSTicker::GetCoreTicker().RemoveTicker(CredentialRotationTickerHandle);
+        CredentialRotationTickerHandle.Reset();
+    }
+}
+
+bool USPDedicatedServerBackendSubsystem::TickCredentialRotation(float)
+{
+    CredentialRotationTickerHandle.Reset();
+
+    if (!bRegistered || NodeCredential.IsEmpty())
+    {
+        return false;
+    }
+
+    RotateNodeCredential();
+    return false;
+}
+
 bool USPDedicatedServerBackendSubsystem::TickHeartbeat(float)
 {
     if (!bRegistered || bDraining)
@@ -255,6 +313,92 @@ bool USPDedicatedServerBackendSubsystem::TickHeartbeat(float)
 
     SendHeartbeat();
     return true;
+}
+
+void USPDedicatedServerBackendSubsystem::RotateNodeCredential()
+{
+    if (!bConfigured || !bRegistered || NodeCredential.IsEmpty())
+    {
+        OnRequestFailed.Broadcast(TEXT("node-credential-rotation"), TEXT("Dedicated server is not ready to rotate its node credential."));
+        return;
+    }
+
+    const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+    Payload->SetStringField(TEXT("serverId"), ServerId);
+
+    const TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = CreateInfrastructureJsonRequest(TEXT("/v1/servers/rotate-credential"), TEXT("POST"));
+    Request->SetContentAsString(SerializeJson(Payload));
+    Request->OnProcessRequestComplete().BindUObject(this, &USPDedicatedServerBackendSubsystem::HandleCredentialRotationResponse);
+
+    if (!Request->ProcessRequest())
+    {
+        OnRequestFailed.Broadcast(TEXT("node-credential-rotation"), TEXT("Unable to start node-credential rotation request."));
+        StartCredentialRotation(60000);
+    }
+}
+
+void USPDedicatedServerBackendSubsystem::HandleCredentialRotationResponse(FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
+{
+    if (!bWasSuccessful || !Response.IsValid())
+    {
+        BroadcastHttpFailure(TEXT("node-credential-rotation"), Response, bWasSuccessful);
+        StartCredentialRotation(60000);
+        return;
+    }
+
+    const int32 StatusCode = Response->GetResponseCode();
+    if (StatusCode == 401 || StatusCode == 409)
+    {
+        BroadcastHttpFailure(TEXT("node-credential-rotation"), Response, bWasSuccessful);
+        RecoverNodeRegistration();
+        return;
+    }
+
+    if (StatusCode < 200 || StatusCode >= 300)
+    {
+        BroadcastHttpFailure(TEXT("node-credential-rotation"), Response, bWasSuccessful);
+        StartCredentialRotation(60000);
+        return;
+    }
+
+    TSharedPtr<FJsonObject> JsonObject;
+    if (!ParseJsonObject(Response->GetContentAsString(), JsonObject))
+    {
+        OnRequestFailed.Broadcast(TEXT("node-credential-rotation"), TEXT("Backend returned invalid credential-rotation JSON."));
+        StartCredentialRotation(60000);
+        return;
+    }
+
+    FString NewCredential;
+    FString CredentialExpiresAt;
+    double CredentialTtlValue = 0.0;
+    JsonObject->TryGetStringField(TEXT("nodeCredential"), NewCredential);
+    JsonObject->TryGetStringField(TEXT("credentialExpiresAt"), CredentialExpiresAt);
+    JsonObject->TryGetNumberField(TEXT("credentialTtlMs"), CredentialTtlValue);
+    const int32 CredentialTtlMs = FMath::RoundToInt(CredentialTtlValue);
+
+    if (NewCredential.IsEmpty() || CredentialTtlMs <= 0)
+    {
+        OnRequestFailed.Broadcast(TEXT("node-credential-rotation"), TEXT("Credential-rotation response is missing required credential metadata."));
+        StartCredentialRotation(60000);
+        return;
+    }
+
+    NodeCredential = MoveTemp(NewCredential);
+    StartCredentialRotation(CredentialTtlMs);
+    OnCredentialRotated.Broadcast(CredentialExpiresAt);
+}
+
+void USPDedicatedServerBackendSubsystem::RecoverNodeRegistration()
+{
+    const bool bWasDraining = bDraining;
+    StopHeartbeat();
+    StopCredentialRotation();
+    bRegistered = false;
+    bDraining = false;
+    bRestoreDrainAfterRegistration = bWasDraining;
+    NodeCredential.Empty();
+    RegisterNode();
 }
 
 void USPDedicatedServerBackendSubsystem::SendHeartbeat()
@@ -280,6 +424,13 @@ void USPDedicatedServerBackendSubsystem::SendHeartbeat()
 
 void USPDedicatedServerBackendSubsystem::HandleHeartbeatResponse(FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
 {
+    if (bWasSuccessful && Response.IsValid() && Response->GetResponseCode() == 401)
+    {
+        BroadcastHttpFailure(TEXT("server-heartbeat"), Response, bWasSuccessful);
+        RecoverNodeRegistration();
+        return;
+    }
+
     if (!bWasSuccessful || !Response.IsValid() || Response->GetResponseCode() < 200 || Response->GetResponseCode() >= 300)
     {
         BroadcastHttpFailure(TEXT("server-heartbeat"), Response, bWasSuccessful);
