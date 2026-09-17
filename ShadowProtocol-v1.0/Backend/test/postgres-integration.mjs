@@ -102,11 +102,11 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   });
   assert.equal(primaryRegistration.status, 200);
   const primaryNode = await primaryRegistration.json();
-  assert.ok(primaryCredential.length >= 32);
+  assert.ok(primaryNode.nodeCredential.length >= 32);
   assert.equal(primaryNode.credentialTtlMs, 600000);
   assert.equal(primaryNode.credentialGraceMs, 30000);
   assert.ok(Date.parse(primaryNode.credentialExpiresAt) > Date.now());
-  let primaryCredential = primaryCredential;
+  let primaryCredential = primaryNode.nodeCredential;
 
   const drainRegistration = await bootstrapPost('/v1/servers/register', {
     serverId: 'ACC-DRAIN',
