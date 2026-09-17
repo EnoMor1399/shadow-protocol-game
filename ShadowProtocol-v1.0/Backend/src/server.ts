@@ -13,10 +13,31 @@ await app.register(websocket);
 const pool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL }) : null;
 const redis = process.env.REDIS_URL ? new Redis(process.env.REDIS_URL, { lazyConnect: true }) : null;
 
+const GAME_RELEASE = '1.0.1';
+const NETWORK_BUILD = 'SP-1.0.1';
+const CONTENT_REVISION = 'EMBASSY-PROTOCOL-101';
+const BACKEND_PROTOCOL_VERSION = '0.8.0';
+const ACCEPTED_NETWORK_BUILDS = new Set(
+  (process.env.ACCEPTED_NETWORK_BUILDS ?? NETWORK_BUILD)
+    .split(',')
+    .map((build) => build.trim())
+    .filter(Boolean)
+);
+const isBuildCompatible = (build: string) => ACCEPTED_NETWORK_BUILDS.has(build.trim());
+const compatibilityPayload = () => ({
+  gameRelease: GAME_RELEASE,
+  networkBuild: NETWORK_BUILD,
+  contentRevision: CONTENT_REVISION,
+  backendProtocol: BACKEND_PROTOCOL_VERSION,
+  acceptedNetworkBuilds: [...ACCEPTED_NETWORK_BUILDS],
+  enforcement: 'strict'
+});
+
 const SESSION_SECRET = process.env.SESSION_SIGNING_SECRET ?? 'dev-only-change-me';
 const SESSION_BOOTSTRAP_SECRET = process.env.SESSION_BOOTSTRAP_SECRET ?? 'dev-bootstrap-change-me';
 const b64url=(value:string|Buffer)=>Buffer.from(value).toString('base64url');
 const sha256=(value:string)=>createHash('sha256').update(value).digest('hex');
+type SessionPayload={sid:string;uid:string;exp:number;region:string;build:string;protocol:string};
 function signSession(payload:Record<string,unknown>){
   const encoded=b64url(JSON.stringify(payload));
   const sig=createHmac('sha256',SESSION_SECRET).update(encoded).digest('base64url');
@@ -27,37 +48,46 @@ function verifySession(token:string){
   const expected=createHmac('sha256',SESSION_SECRET).update(encoded).digest();
   let supplied:Buffer;try{supplied=Buffer.from(sig,'base64url')}catch{return null}
   if(expected.length!==supplied.length||!timingSafeEqual(expected,supplied))return null;
-  try{const payload=JSON.parse(Buffer.from(encoded,'base64url').toString('utf8')) as {sid:string;uid:string;exp:number;region:string};if(payload.exp<Date.now())return null;return payload}catch{return null}
+  try{
+    const payload=JSON.parse(Buffer.from(encoded,'base64url').toString('utf8')) as SessionPayload;
+    if(payload.exp<Date.now()||!payload.sid||!payload.uid||!payload.region||!payload.build||!payload.protocol)return null;
+    return payload;
+  }catch{return null}
 }
 function bearer(req:any){const h=String(req.headers?.authorization??'');return h.startsWith('Bearer ')?h.slice(7):''}
+function incompatibleBuild(reply:any, receivedBuild:string|null){
+  return reply.code(426).send({error:'client-build-incompatible',receivedBuild,...compatibilityPayload()});
+}
 
-app.get('/health', async () => ({ service: 'shadow-protocol-backend', ok: true, version: '0.7.0' }));
-
+app.get('/health', async () => ({ service: 'shadow-protocol-backend', ok: true, version: BACKEND_PROTOCOL_VERSION, ...compatibilityPayload() }));
+app.get('/v1/compatibility', async () => compatibilityPayload());
 
 const gameSessionSchema=z.object({userId:z.string().uuid(),region:z.string().min(2).max(16),build:z.string().min(2).max(32),deviceNonce:z.string().min(8).max(128)});
 app.post('/v1/auth/game-session',async(req,reply)=>{
   // Production identity provider / platform auth calls this bootstrap endpoint. A raw userId from a game client is not sufficient identity proof.
   if(String(req.headers['x-session-bootstrap-secret']??'')!==SESSION_BOOTSTRAP_SECRET)return reply.code(401).send({error:'bootstrap-auth-required'});
   const parsed=gameSessionSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
+  if(!isBuildCompatible(parsed.data.build))return incompatibleBuild(reply,parsed.data.build);
   const sessionId=crypto.randomUUID(),expiresAt=Date.now()+15*60_000;
-  const token=signSession({sid:sessionId,uid:parsed.data.userId,region:parsed.data.region,build:parsed.data.build,exp:expiresAt});
+  const token=signSession({sid:sessionId,uid:parsed.data.userId,region:parsed.data.region,build:parsed.data.build,protocol:BACKEND_PROTOCOL_VERSION,exp:expiresAt});
   if(pool)await pool.query(`insert into game_sessions(id,user_id,region,build,device_nonce_hash,expires_at) values($1,$2,$3,$4,$5,to_timestamp($6/1000.0))`,[sessionId,parsed.data.userId,parsed.data.region,parsed.data.build,sha256(parsed.data.deviceNonce),expiresAt]);
-  if(redis)await redis.setex(`game-session:${sessionId}`,15*60,JSON.stringify({userId:parsed.data.userId,region:parsed.data.region,build:parsed.data.build}));
-  return reply.code(201).send({sessionId,sessionToken:token,expiresAt:new Date(expiresAt).toISOString(),authority:'authenticated-session'});
+  if(redis)await redis.setex(`game-session:${sessionId}`,15*60,JSON.stringify({userId:parsed.data.userId,region:parsed.data.region,build:parsed.data.build,protocol:BACKEND_PROTOCOL_VERSION}));
+  return reply.code(201).send({sessionId,sessionToken:token,expiresAt:new Date(expiresAt).toISOString(),authority:'authenticated-session',compatibility:compatibilityPayload()});
 });
 
 const allocationSchema=z.object({region:z.string().min(2).max(16),mode:z.literal('PROTOCOL'),map:z.literal('EMBASSY'),ranked:z.boolean().default(true)});
 app.post('/v1/matches/allocate',async(req,reply)=>{
   const session=verifySession(bearer(req));if(!session)return reply.code(401).send({error:'invalid-game-session'});
+  if(!isBuildCompatible(session.build)||session.protocol!==BACKEND_PROTOCOL_VERSION)return incompatibleBuild(reply,session.build);
   const parsed=allocationSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(parsed.data.region!==session.region)return reply.code(409).send({error:'session-region-mismatch'});
   const allocationId=crypto.randomUUID(),matchId=crypto.randomUUID(),serverId=`${parsed.data.region.toUpperCase()}-${randomBytes(2).toString('hex').toUpperCase()}`;
   const connectToken=randomBytes(24).toString('base64url'),connectHash=sha256(connectToken),expiresAt=Date.now()+120_000;
   if(pool){
-    await pool.query(`insert into matches(id,mode,map_code,region,ranked,server_build) values($1,$2,$3,$4,$5,$6)`,[matchId,parsed.data.mode,parsed.data.map,parsed.data.region,parsed.data.ranked,'0.7']);
+    await pool.query(`insert into matches(id,mode,map_code,region,ranked,server_build) values($1,$2,$3,$4,$5,$6)`,[matchId,parsed.data.mode,parsed.data.map,parsed.data.region,parsed.data.ranked,NETWORK_BUILD]);
     await pool.query(`insert into server_allocations(id,match_id,server_id,region,status,connect_token_hash,expires_at) values($1,$2,$3,$4,'reserved',$5,to_timestamp($6/1000.0))`,[allocationId,matchId,serverId,parsed.data.region,connectHash,expiresAt]);
   }
-  return reply.code(201).send({allocationId,matchId,serverId,region:parsed.data.region,tickRate:60,connectToken,expiresAt:new Date(expiresAt).toISOString()});
+  return reply.code(201).send({allocationId,matchId,serverId,region:parsed.data.region,tickRate:60,connectToken,expiresAt:new Date(expiresAt).toISOString(),networkBuild:NETWORK_BUILD,backendProtocol:BACKEND_PROTOCOL_VERSION});
 });
 
 const queueSchema = z.object({
@@ -70,26 +100,26 @@ const queueSchema = z.object({
 });
 app.post('/v1/matchmaking/queue', async (req, reply) => {
   const parsed = queueSchema.safeParse(req.body);
-  if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+  if (!parsed.success) return reply.code(400).send({ error:parsed.error.flatten() });
   // Production: authenticate user; never accept rating/trust from client. Fetch both from DB.
   const ticket = `mm_${crypto.randomUUID()}`;
   if (redis) await redis.setex(`matchmaking:${ticket}`, 90, JSON.stringify(parsed.data));
-  return { ticket, status: 'queued', factors: ['skill','party-size','region','latency','recent-performance','trust'] };
+  return { ticket, status:'queued', factors:['skill','party-size','region','latency','recent-performance','trust'] };
 });
 
 app.get('/v1/profiles/:userId', async (req, reply) => {
-  if (!pool) return reply.code(503).send({ error: 'database-not-configured' });
-  const { userId } = req.params as { userId: string };
+  if (!pool) return reply.code(503).send({ error:'database-not-configured' });
+  const { userId } = req.params as { userId:string };
   const r = await pool.query('select p.*, u.trust_score from profiles p join users u on u.id=p.user_id where p.user_id=$1', [userId]);
-  if (!r.rowCount) return reply.code(404).send({ error: 'not-found' });
+  if (!r.rowCount) return reply.code(404).send({ error:'not-found' });
   return r.rows[0];
 });
 
-const taskForceSchema = z.object({ ownerUserId: z.string().uuid(), name: z.string().min(3).max(48), tag: z.string().min(2).max(6), emblemKey: z.string().max(160).optional() });
+const taskForceSchema = z.object({ ownerUserId:z.string().uuid(), name:z.string().min(3).max(48), tag:z.string().min(2).max(6), emblemKey:z.string().max(160).optional() });
 app.post('/v1/task-forces', async (req, reply) => {
   const p = taskForceSchema.safeParse(req.body);
-  if (!p.success) return reply.code(400).send({ error: p.error.flatten() });
-  if (!pool) return reply.code(503).send({ error: 'database-not-configured' });
+  if (!p.success) return reply.code(400).send({ error:p.error.flatten() });
+  if (!pool) return reply.code(503).send({ error:'database-not-configured' });
   const c = await pool.connect();
   try {
     await c.query('begin');
@@ -125,7 +155,6 @@ app.post('/v1/matches/events', async (req, reply) => {
   return reply.code(202).send({accepted:true});
 });
 
-
 const roundResultSchema = z.object({
   matchId:z.string().uuid(), roundNumber:z.number().int().min(1).max(99), attackingTeam:z.string().min(2).max(32),
   defendingTeam:z.string().min(2).max(32), winnerTeam:z.string().min(2).max(32), outcomeReason:z.string().min(2).max(160),
@@ -153,8 +182,6 @@ app.post('/v1/matches/equipment-events', async (req, reply) => {
     [parsed.data.matchId,parsed.data.roundNumber,parsed.data.userId??null,parsed.data.equipmentType,parsed.data.position??null,parsed.data.affectedEntities,parsed.data.gameTimeMs]);
   return reply.code(202).send({accepted:true});
 });
-
-
 
 const playerSlotSchema=z.object({
   matchId:z.string().uuid(),roundNumber:z.number().int().min(1).max(9),slotIndex:z.number().int().min(0).max(9),
@@ -193,7 +220,6 @@ app.post('/v1/matches/ballistic-events',async(req,reply)=>{
   return reply.code(202).send({accepted:true});
 });
 
-
 const readyStateSchema=z.object({
   matchId:z.string().uuid(),roundNumber:z.number().int().min(1).max(9),slotIndex:z.number().int().min(0).max(9),ready:z.boolean(),spawnGroup:z.string().min(1).max(64).optional()
 });
@@ -212,24 +238,26 @@ app.post('/v1/matches/ready-state',async(req,reply)=>{
 const reconnectTicketSchema=z.object({matchId:z.string().uuid(),roundNumber:z.number().int().min(1).max(9),slotIndex:z.number().int().min(0).max(9)});
 app.post('/v1/matches/reconnect-ticket',async(req,reply)=>{
   const session=verifySession(bearer(req));if(!session)return reply.code(401).send({error:'invalid-game-session'});
+  if(!isBuildCompatible(session.build)||session.protocol!==BACKEND_PROTOCOL_VERSION)return incompatibleBuild(reply,session.build);
   const parsed=reconnectTicketSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   const token=randomBytes(32).toString('base64url'),hash=sha256(token),deadline=new Date(Date.now()+90_000).toISOString();
   if(pool){
     const r=await pool.query(`update match_player_slots set connection_state='reconnecting',ready=false,reconnect_token_hash=$4,reconnect_deadline=$5 where match_id=$1 and round_number=$2 and slot_index=$3 and user_id=$6 returning slot_index`,[parsed.data.matchId,parsed.data.roundNumber,parsed.data.slotIndex,hash,deadline,session.uid]);
     if(!r.rowCount)return reply.code(403).send({error:'slot-ownership-required'});
   }
-  return reply.code(201).send({reconnectToken:token,reconnectDeadline:deadline,graceSeconds:90});
+  return reply.code(201).send({reconnectToken:token,reconnectDeadline:deadline,graceSeconds:90,networkBuild:NETWORK_BUILD,backendProtocol:BACKEND_PROTOCOL_VERSION});
 });
 
 const reconnectSchema=z.object({matchId:z.string().uuid(),roundNumber:z.number().int().min(1).max(9),slotIndex:z.number().int().min(0).max(9),reconnectToken:z.string().min(32).max(256)});
 app.post('/v1/matches/reconnect',async(req,reply)=>{
   const session=verifySession(bearer(req));if(!session)return reply.code(401).send({error:'invalid-game-session'});
+  if(!isBuildCompatible(session.build)||session.protocol!==BACKEND_PROTOCOL_VERSION)return incompatibleBuild(reply,session.build);
   const parsed=reconnectSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(!pool)return reply.code(503).send({error:'database-not-configured'});
   const tokenHash=sha256(parsed.data.reconnectToken);
   const r=await pool.query(`update match_player_slots set connection_state='connected',reconnect_deadline=null,reconnect_token_hash=null where match_id=$1 and round_number=$2 and slot_index=$3 and user_id=$4 and reconnect_token_hash=$5 and reconnect_deadline>now() returning slot_index,user_id,team,spawn_group`,[parsed.data.matchId,parsed.data.roundNumber,parsed.data.slotIndex,session.uid,tokenHash]);
   if(!r.rowCount)return reply.code(403).send({error:'reconnect-denied'});
-  return reply.send({reconnected:true,slot:r.rows[0]});
+  return reply.send({reconnected:true,slot:r.rows[0],networkBuild:NETWORK_BUILD,backendProtocol:BACKEND_PROTOCOL_VERSION});
 });
 
 const killFeedSchema=z.object({
@@ -249,8 +277,6 @@ app.post('/v1/matches/overtime',async(req,reply)=>{
   if(pool)await pool.query('insert into match_overtime_events(match_id,round_number,trigger_reason,duration_seconds) values($1,$2,$3,$4)',[parsed.data.matchId,parsed.data.roundNumber,parsed.data.triggerReason,parsed.data.durationSeconds]);
   return reply.code(202).send({accepted:true});
 });
-
-
 
 const environmentEventSchema=z.object({
   matchId:z.string().uuid(),roundNumber:z.number().int().min(1).max(9),userId:z.string().uuid().nullable().optional(),
@@ -277,16 +303,15 @@ app.post('/v1/matches/combat-events',async(req,reply)=>{
   return reply.code(202).send({accepted:true,authority:'dedicated-server'});
 });
 
-app.get('/v1/live', { websocket: true }, (socket) => {
-  socket.send(JSON.stringify({ type:'hello', system:'SHADOW PROTOCOL', message:'EVERY MOVE IS CLASSIFIED.' }));
+app.get('/v1/live', { websocket:true }, (socket) => {
+  socket.send(JSON.stringify({ type:'hello', system:'SHADOW PROTOCOL', message:'EVERY MOVE IS CLASSIFIED.', networkBuild:NETWORK_BUILD, backendProtocol:BACKEND_PROTOCOL_VERSION }));
   socket.on('message', (raw) => {
     // Production socket accepts authenticated presence/party events only; authoritative match state stays on dedicated server.
-    socket.send(JSON.stringify({ type:'ack', receivedBytes: raw.byteLength }));
+    socket.send(JSON.stringify({ type:'ack', receivedBytes:raw.byteLength }));
   });
 });
 
 const port = Number(process.env.PORT ?? 8080);
-
 
 const tacticalInteractionSchema=z.object({
   matchId:z.string().uuid(),roundNumber:z.number().int().min(1).max(9),userId:z.string().uuid().optional(),
