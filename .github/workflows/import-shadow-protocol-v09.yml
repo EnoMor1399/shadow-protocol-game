@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '.bootstrap/shadow-protocol-v09/part-16.b64'
+      - '.github/workflows/import-shadow-protocol-v09.yml'
   workflow_dispatch:
 
 permissions:
@@ -28,7 +29,18 @@ jobs:
             echo "Expected 17 bootstrap parts, found ${#PARTS[@]}" >&2
             exit 1
           fi
-          cat "${PARTS[@]}" > /tmp/shadow-protocol-v09.b64
+          cat "${PARTS[@]}" > /tmp/shadow-protocol-v09.b64.broken
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('/tmp/shadow-protocol-v09.b64.broken')
+          s = p.read_text()
+          if len(s) != 118111:
+              raise SystemExit(f'Unexpected bootstrap stream length: {len(s)}')
+          repaired = s[:31931] + 'P' + s[31931:]
+          if len(repaired) != 118112:
+              raise SystemExit('Repair length mismatch')
+          Path('/tmp/shadow-protocol-v09.b64').write_text(repaired)
+          PY
           base64 --decode /tmp/shadow-protocol-v09.b64 > /tmp/shadow-protocol-v09.tar.xz
           echo '02234715b9672bae72db52305d8774c2f90507b0874fdab4cb6dae443d14c2f9  /tmp/shadow-protocol-v09.tar.xz' | sha256sum -c -
           mkdir -p ShadowProtocol-v0.9
