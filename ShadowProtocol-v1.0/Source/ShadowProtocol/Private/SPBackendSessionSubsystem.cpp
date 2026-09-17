@@ -341,6 +341,7 @@ void USPBackendSessionSubsystem::HandleAllocationResponse(FHttpRequestPtr, FHttp
     const bool bHasAllocation = JsonObject->TryGetStringField(TEXT("allocationId"), Allocation.AllocationId);
     const bool bHasMatch = JsonObject->TryGetStringField(TEXT("matchId"), Allocation.MatchId);
     const bool bHasServer = JsonObject->TryGetStringField(TEXT("serverId"), Allocation.ServerId);
+    const bool bHasConnectHost = JsonObject->TryGetStringField(TEXT("connectHost"), Allocation.ConnectHost);
     JsonObject->TryGetStringField(TEXT("region"), Allocation.Region);
     JsonObject->TryGetStringField(TEXT("connectToken"), Allocation.ConnectToken);
     JsonObject->TryGetStringField(TEXT("expiresAt"), Allocation.ExpiresAt);
@@ -353,9 +354,16 @@ void USPBackendSessionSubsystem::HandleAllocationResponse(FHttpRequestPtr, FHttp
         Allocation.TickRate = FMath::RoundToInt(TickRate);
     }
 
-    if (!bHasAllocation || !bHasMatch || !bHasServer || Allocation.ConnectToken.IsEmpty())
+    double ConnectPort = 0.0;
+    const bool bHasConnectPort = JsonObject->TryGetNumberField(TEXT("connectPort"), ConnectPort);
+    if (bHasConnectPort)
     {
-        OnRequestFailed.Broadcast(TEXT("allocation"), TEXT("Allocation response is missing required connection data."));
+        Allocation.ConnectPort = FMath::RoundToInt(ConnectPort);
+    }
+
+    if (!bHasAllocation || !bHasMatch || !bHasServer || Allocation.ConnectToken.IsEmpty() || !bHasConnectHost || Allocation.ConnectHost.IsEmpty() || !bHasConnectPort || Allocation.ConnectPort < 1 || Allocation.ConnectPort > 65535)
+    {
+        OnRequestFailed.Broadcast(TEXT("allocation"), TEXT("Allocation response is missing a valid server connection target."));
         return;
     }
 
