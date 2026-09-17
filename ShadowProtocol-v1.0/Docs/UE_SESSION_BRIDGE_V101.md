@@ -19,7 +19,7 @@ The Unreal client must **never** contain `SESSION_BOOTSTRAP_SECRET` or `MATCH_SE
 
 `InstallAuthenticatedSession(...)` keeps those values in memory. The subsystem does not persist the Bearer token to config, SaveGame or logs.
 
-`MATCH_SERVER_SECRET` belongs only on trusted dedicated-server/backend infrastructure. Authoritative match telemetry endpoints reject ordinary game clients that do not present that credential.
+`MATCH_SERVER_SECRET` belongs only on trusted dedicated-server/backend infrastructure. Authoritative match telemetry and allocation-admission endpoints reject ordinary game clients that do not present that credential.
 
 ## Client flow
 
@@ -36,7 +36,7 @@ The Unreal client must **never** contain `SESSION_BOOTSTRAP_SECRET` or `MATCH_SE
 
 ## Dedicated-server connection handoff
 
-v1.0.1 now has an explicit connection-target contract between allocation and Unreal.
+v1.0.1 has an explicit connection-target contract between allocation and Unreal.
 
 Backend configuration:
 
@@ -45,8 +45,10 @@ Backend configuration:
 
 Development defaults to `127.0.0.1:7777`. Production intentionally has **no implicit localhost fallback**. If either production value is missing or the port is outside `1..65535`, `/v1/matches/allocate` returns `503 game-server-connect-target-not-configured`.
 
-Allocation responses now include:
+Allocation responses include:
 
+- `allocationId`
+- `matchId`
 - `connectHost`
 - `connectPort`
 - `connectToken`
@@ -55,11 +57,41 @@ Allocation responses now include:
 
 `FSPMatchAllocation` exposes `ConnectHost` and `ConnectPort` to Blueprint. `USPBackendSessionSubsystem` verifies both values before broadcasting `OnAllocationCompleted`, preventing UMG/client-travel code from treating an address-less allocation as success.
 
-When PostgreSQL is enabled, the connection target is persisted on `server_allocations`. Existing databases must apply:
+When PostgreSQL is enabled, the backend persists the owning user, target host/port, allocation status, expiry and **hash** of the connect token. The plaintext token remains only in the allocation response/client connection path.
 
-`Backend/db/v101_connection_target.sql`
+Existing databases apply the v1.0.1 migration through:
 
-This static host/port configuration is the v1.0.1 handoff contract, not the final regional scheduler. A later allocator should replace it with a real healthy-server registry that selects a ready endpoint by region/build/capacity.
+```bash
+npm run db:upgrade:v101
+```
+
+Fresh databases use:
+
+```bash
+npm run db:init
+```
+
+This static host/port configuration is the v1.0.1 handoff contract, not the final regional scheduler. A later allocator should replace it with a healthy-server registry that selects a ready endpoint by region/build/capacity.
+
+## One-time connection admission
+
+The short-lived allocation token is **not** proof by itself until a trusted dedicated server redeems it.
+
+Recommended connection sequence:
+
+1. Unreal receives `ConnectHost`, `ConnectPort`, `AllocationId`, `MatchId` and `ConnectToken` from `OnAllocationCompleted`.
+2. The online/travel layer connects to the returned host/port and presents the allocation/match/token data to the dedicated server during the server's admission handshake.
+3. The dedicated server calls `POST /v1/matches/admit` over its trusted backend channel and supplies:
+   - `allocationId`;
+   - `matchId`;
+   - the presented `connectToken`;
+   - infrastructure header `x-match-server-secret`.
+4. The backend hashes the presented token and atomically verifies allocation id, match id, token hash, expiry, valid pre-live status and that the token has never been consumed.
+5. On success, the backend returns the allocated `userId`, server id, region, network build and backend protocol, changes the allocation to `live`, and records `connect_token_consumed_at`.
+6. The dedicated server admits/spawns/possesses the player only after that success response.
+7. A wrong, expired or replayed token receives `403 admission-denied` and must not create a player session.
+
+The client never calls the privileged admission endpoint itself and must never know `MATCH_SERVER_SECRET`. This keeps admission authoritative even if a client tampers with local travel parameters.
 
 ## Session rotation
 
@@ -101,21 +133,21 @@ Bind the ready-room or online-session controller to:
 
 - `OnCompatibilityChecked` — display Verified / Update Required state;
 - `OnSessionRefreshed` — update the displayed/session-controller expiry timer without exposing the Bearer token;
-- `OnAllocationCompleted` — hand `ConnectHost`, `ConnectPort` and `ConnectToken` to the connection/travel layer;
-- `OnReconnectTicketIssued` — start/update the reconnect countdown and persist the token only in memory;
+- `OnAllocationCompleted` — hand `ConnectHost`, `ConnectPort`, `AllocationId`, `MatchId` and `ConnectToken` to the connection/travel layer;
+- `OnReconnectTicketIssued` — start/update the reconnect countdown and keep the token only in memory;
 - `OnReconnectCompleted` — restore the recovered player slot and resume the connection/travel path;
 - `OnUpgradeRequired` — block matchmaking/reconnect and present required build/protocol details;
 - `OnRequestFailed` — present transport/auth/allocation/reconnect failures without treating them as successful lobby state.
 
 Recommended UMG sequence:
 
-**Ready Room → Compatibility → Identity Session → Allocate → Validated Host/Port → Connect → Refresh Session as Needed → Live Match**
+**Ready Room → Compatibility → Identity Session → Allocate → Validated Host/Port → Connect → Server Redeems Admission Token → Admit Player → Refresh Session as Needed → Live Match**
 
 Recovery sequence:
 
 **Transport Loss → Refresh Session if Needed → Reconnect Ticket → Reserved Slot Countdown → Reconnect → Restore Slot → Resume Match**
 
-The subsystem still stops before transport-specific server travel. It now supplies a backend-owned connection target, but the actual `ClientTravel` / OnlineSubsystem connection step remains the responsibility of the online-session controller and must attach/validate the short-lived connect token according to the dedicated-server admission protocol.
+The subsystem stops before transport-specific server travel. It supplies backend-owned connection metadata and a short-lived token; actual `ClientTravel` / OnlineSubsystem transport and dedicated-server redemption remain the responsibility of the connection/server admission layers.
 
 ## Build compatibility behavior
 
@@ -125,8 +157,9 @@ The allocated/reconnected server build is then validated with `USPBuildInfoLibra
 
 ## Dedicated-server authority
 
-The following event families are guarded by `x-match-server-secret` and must not be authored by public clients:
+The following operations are guarded by `x-match-server-secret` and must not be authored by public clients:
 
+- one-time allocation-token admission;
 - anti-cheat events;
 - generic match telemetry;
 - round results;
@@ -140,6 +173,16 @@ The following event families are guarded by `x-match-server-secret` and must not
 - tactical interactions.
 
 This credential is infrastructure-only. It must be injected into trusted server processes through deployment secrets and never packaged into the client.
+
+## Database validation
+
+The backend now has repeatable database commands:
+
+- `npm run db:init` — base schema plus v1.0.1 migration;
+- `npm run db:upgrade:v101` — v1.0.1 allocation/admission migration only;
+- `npm run test:postgres` — persistent allocation/admission/ready/reconnect integration test.
+
+GitHub Actions runs the PostgreSQL test against a disposable PostgreSQL 16 service. It verifies hashed allocation-token persistence, one-time admission and replay rejection, database-owned ready state, reconnect token hashing/deadline behavior and successful slot restoration.
 
 ## Unreal modules
 
@@ -158,14 +201,14 @@ Primary files:
 
 ## Validation boundary
 
-The browser and backend paths are validated by GitHub Actions, including compatibility/session/allocation, connection-target metadata, production fail-closed routing, session refresh, authenticated matchmaking identity, dedicated-server telemetry authorization and fail-closed ownership behavior without PostgreSQL. The Unreal bridge has been source-reviewed only in the current environment. It still requires Unreal Header Tool, UE C++ compilation, PIE and packaged-client testing before it can be treated as production-compiled code.
+The browser and backend paths are validated by GitHub Actions, including compatibility/session/allocation, connection-target metadata, production fail-closed routing, session refresh, authenticated matchmaking identity, dedicated-server telemetry authorization, real PostgreSQL schema initialization, one-time admission and reserved-slot recovery. The Unreal bridge has been source-reviewed only in the current environment. It still requires Unreal Header Tool, UE C++ compilation, PIE and packaged-client testing before it can be treated as production-compiled code.
 
 ## Next integration tasks
 
 1. Compile the module in Unreal Engine 5.6 and fix any UHT/compiler-specific issues.
 2. Bind ready-room/session-expiry/reconnect UMG widgets to subsystem delegates.
 3. Implement the trusted platform/account bootstrap that supplies the signed game session.
-4. Implement actual client travel / OnlineSubsystem admission using the returned host, port and short-lived connect token.
-5. Replace the static v1.0.1 connection target with a regional healthy-server registry/scheduler.
-6. Add backend reconnect integration coverage against a disposable PostgreSQL instance.
-7. Run 10-client dedicated-server compatibility, token-refresh, reconnect and round-transition tests.
+4. Implement actual client travel / OnlineSubsystem connection using the returned host, port and short-lived connect token.
+5. Implement the dedicated-server pre-login/admission layer that calls `/v1/matches/admit` before player spawn/possession.
+6. Replace the static v1.0.1 connection target with a regional healthy-server registry/scheduler.
+7. Run 10-client dedicated-server compatibility, admission, token-refresh, reconnect and round-transition tests.
