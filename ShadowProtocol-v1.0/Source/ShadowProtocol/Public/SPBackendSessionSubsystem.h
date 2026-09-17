@@ -64,14 +64,43 @@ struct FSPMatchAllocation
     FString BackendProtocol;
 };
 
+USTRUCT(BlueprintType)
+struct FSPReconnectResult
+{
+    GENERATED_BODY()
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
+    bool bReconnected = false;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
+    int32 SlotIndex = INDEX_NONE;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
+    FString UserId;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
+    FString Team;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
+    FString SpawnGroup;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
+    FString NetworkBuild;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
+    FString BackendProtocol;
+};
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSPCompatibilityChecked, bool, bCompatible, FSPBackendCompatibility, Compatibility);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPAllocationCompleted, FSPMatchAllocation, Allocation);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FSPReconnectTicketIssued, FString, ReconnectToken, FString, ReconnectDeadline, int32, GraceSeconds);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPReconnectCompleted, FSPReconnectResult, Result);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FSPUpgradeRequired, FString, RequiredBuild, FString, BackendProtocol, FString, Reason);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSPBackendRequestFailed, FString, Context, FString, ErrorMessage);
 
 /**
- * Thin client-side bridge for the Shadow Protocol backend compatibility and
- * authenticated allocation flow.
+ * Thin client-side bridge for the Shadow Protocol backend compatibility,
+ * authenticated allocation and reconnect flow.
  *
  * SECURITY: this subsystem never stores or transmits SESSION_BOOTSTRAP_SECRET.
  * An authenticated game-session token must be supplied by a trusted platform /
@@ -88,6 +117,12 @@ public:
 
     UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Network")
     FSPAllocationCompleted OnAllocationCompleted;
+
+    UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Network")
+    FSPReconnectTicketIssued OnReconnectTicketIssued;
+
+    UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Network")
+    FSPReconnectCompleted OnReconnectCompleted;
 
     UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Network")
     FSPUpgradeRequired OnUpgradeRequired;
@@ -119,6 +154,12 @@ public:
     UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
     void AllocateProtocolServer(const FString& Region, bool bRanked = true);
 
+    UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
+    void RequestReconnectTicket(const FString& MatchId, int32 RoundNumber, int32 SlotIndex);
+
+    UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
+    void ReconnectToReservedSlot(const FString& MatchId, int32 RoundNumber, int32 SlotIndex, const FString& ReconnectToken);
+
     UFUNCTION(BlueprintPure, Category="Shadow Protocol|Network")
     FSPBackendCompatibility GetLastCompatibility() const { return LastCompatibility; }
 
@@ -133,8 +174,12 @@ private:
     FSPBackendCompatibility LastCompatibility;
 
     FString BuildUrl(const FString& Path) const;
+    bool CanUseAuthenticatedMatchEndpoint(const FString& Context);
+    TSharedRef<IHttpRequest, ESPMode::ThreadSafe> CreateAuthenticatedJsonRequest(const FString& Path, const FString& Verb);
     void HandleCompatibilityResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void HandleAllocationResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+    void HandleReconnectTicketResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+    void HandleReconnectResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void BroadcastHttpFailure(const FString& Context, FHttpResponsePtr Response, bool bWasSuccessful);
     bool ParseCompatibility(const TSharedPtr<FJsonObject>& JsonObject, FSPBackendCompatibility& OutCompatibility) const;
     void HandleUpgradeResponse(const TSharedPtr<FJsonObject>& JsonObject, const FString& FallbackReason);
