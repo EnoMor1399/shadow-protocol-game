@@ -1,0 +1,15 @@
+{
+  "FileVersion": 3,
+  "EngineAssociation": "5.6",
+  "Category": "Games",
+  "Description": "Shadow Protocol - tactical intelligence warfare FPS",
+  "Modules": [
+    {"Name":"ShadowProtocol","Type":"Runtime","LoadingPhase":"Default"}
+  ],
+  "Plugins": [
+    {"Name":"EnhancedInput","Enabled":true},
+    {"Name":"GameplayTags","Enabled":true},
+    {"Name":"OnlineSubsystem","Enabled":true},
+    {"Name":"OnlineSubsystemUtils","Enabled":true}
+  ]
+}
