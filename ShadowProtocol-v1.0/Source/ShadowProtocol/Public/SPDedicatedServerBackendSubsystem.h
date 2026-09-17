@@ -1,0 +1,172 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Http.h"
+#include "Subsystems/GameInstanceSubsystem.h"
+#include "SPDedicatedServerBackendSubsystem.generated.h"
+
+USTRUCT(BlueprintType)
+struct FSPDedicatedServerRegistration
+{
+    GENERATED_BODY()
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    FString NodeId;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    FString ServerId;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    FString Region;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    FString NetworkBuild;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    FString Status;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    int32 Capacity = 0;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    int32 ActiveAllocations = 0;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    int32 HeartbeatTtlMs = 0;
+};
+
+USTRUCT(BlueprintType)
+struct FSPDedicatedServerAdmission
+{
+    GENERATED_BODY()
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    bool bAdmitted = false;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    FString AllocationId;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    FString MatchId;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    FString ServerId;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    FString Region;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    FString UserId;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    FString NetworkBuild;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    FString BackendProtocol;
+};
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPDedicatedServerRegistered, FSPDedicatedServerRegistration, Registration);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FSPDedicatedServerHeartbeat, FString, ServerId, FString, Status, int32, ActiveAllocations);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPDedicatedServerAdmissionCompleted, FSPDedicatedServerAdmission, Admission);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FSPDedicatedServerAllocationReleased, FString, AllocationId, FString, MatchId, FString, Status, int32, ActiveAllocations);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPDedicatedServerDrainChanged, bool, bDraining);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSPDedicatedServerBackendFailed, FString, Context, FString, ErrorMessage);
+
+/**
+ * Dedicated-server-only bridge for the v1.0.1 regional registry and admission API.
+ *
+ * The infrastructure credential is loaded from MATCH_SERVER_SECRET at runtime and
+ * is never exposed to Blueprint, config files, logs, SaveGame data or the game client.
+ * Shipped clients may contain this class as code, but ConfigureFromRuntime refuses
+ * to activate it outside a dedicated-server process.
+ */
+UCLASS()
+class SHADOWPROTOCOL_API USPDedicatedServerBackendSubsystem : public UGameInstanceSubsystem
+{
+    GENERATED_BODY()
+
+public:
+    virtual void Initialize(FSubsystemCollectionBase& Collection) override;
+    virtual void Deinitialize() override;
+
+    UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Dedicated Server")
+    FSPDedicatedServerRegistered OnRegistered;
+
+    UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Dedicated Server")
+    FSPDedicatedServerHeartbeat OnHeartbeat;
+
+    UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Dedicated Server")
+    FSPDedicatedServerAdmissionCompleted OnAdmissionCompleted;
+
+    UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Dedicated Server")
+    FSPDedicatedServerAllocationReleased OnAllocationReleased;
+
+    UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Dedicated Server")
+    FSPDedicatedServerDrainChanged OnDrainChanged;
+
+    UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Dedicated Server")
+    FSPDedicatedServerBackendFailed OnRequestFailed;
+
+    /** Reads non-secret routing configuration from command-line arguments and the secret from MATCH_SERVER_SECRET. */
+    bool ConfigureFromRuntime();
+
+    UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Dedicated Server")
+    void RegisterNode();
+
+    UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Dedicated Server")
+    void SendHeartbeat();
+
+    UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Dedicated Server")
+    void MarkDraining();
+
+    UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Dedicated Server")
+    void AdmitConnection(const FString& AllocationId, const FString& MatchId, const FString& ConnectToken);
+
+    UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Dedicated Server")
+    void ReleaseAllocation(const FString& AllocationId, const FString& MatchId, bool bFailed = false);
+
+    UFUNCTION(BlueprintPure, Category="Shadow Protocol|Dedicated Server")
+    bool IsConfigured() const { return bConfigured; }
+
+    UFUNCTION(BlueprintPure, Category="Shadow Protocol|Dedicated Server")
+    bool IsRegistered() const { return bRegistered; }
+
+    UFUNCTION(BlueprintPure, Category="Shadow Protocol|Dedicated Server")
+    bool IsDraining() const { return bDraining; }
+
+    UFUNCTION(BlueprintPure, Category="Shadow Protocol|Dedicated Server")
+    FString GetServerId() const { return ServerId; }
+
+    UFUNCTION(BlueprintPure, Category="Shadow Protocol|Dedicated Server")
+    FString GetRegion() const { return Region; }
+
+private:
+    FString BackendBaseUrl = TEXT("http://127.0.0.1:8080");
+    FString ServerId;
+    FString Region;
+    FString PublicHost;
+    int32 PublicPort = 0;
+    int32 Capacity = 10;
+    FString MatchServerSecret;
+
+    bool bConfigured = false;
+    bool bRegistered = false;
+    bool bDraining = false;
+    float HeartbeatIntervalSeconds = 10.0f;
+    FDelegateHandle HeartbeatTickerHandle;
+
+    FString BuildUrl(const FString& Path) const;
+    bool HasRequiredConfiguration() const;
+    TSharedRef<IHttpRequest, ESPMode::ThreadSafe> CreateInfrastructureJsonRequest(const FString& Path, const FString& Verb) const;
+    bool TickHeartbeat(float DeltaSeconds);
+    void StartHeartbeat(int32 HeartbeatTtlMs);
+    void StopHeartbeat();
+    void SendBestEffortShutdownDrain();
+
+    void HandleRegistrationResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+    void HandleHeartbeatResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+    void HandleDrainResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+    void HandleAdmissionResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+    void HandleReleaseResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+    void BroadcastHttpFailure(const FString& Context, FHttpResponsePtr Response, bool bWasSuccessful);
+};
