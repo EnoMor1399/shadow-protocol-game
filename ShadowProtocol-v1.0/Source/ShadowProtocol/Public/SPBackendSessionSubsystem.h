@@ -55,6 +55,12 @@ struct FSPMatchAllocation
     FString ConnectToken;
 
     UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
+    FString ConnectHost;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
+    int32 ConnectPort = 0;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
     FString ExpiresAt;
 
     UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
