@@ -178,6 +178,7 @@ void ASPProtocolGameMode::Logout(AController* Exiting)
     {
         if(auto* PS=Exiting->GetPlayerState<ASPPlayerState>())
         {
+            // Keep the replicated slot reserved while backend/session services validate a reconnect ticket.
             if(GS)
             {
                 for(FSPCompetitivePlayerSlot& Slot : GS->PlayerSlots)
@@ -336,6 +337,7 @@ void ASPProtocolGameMode::FinishRound(ESPTeam Winner,const FString& Reason)
     }
     UE_LOG(LogTemp,Log,TEXT("Shadow Protocol round complete: %s"),*Reason);
 }
+
 
 bool ASPProtocolGameMode::AuthorizePlayerSession(ASPPlayerState* Player,const FString& SessionId)
 {

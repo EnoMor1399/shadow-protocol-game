@@ -64,6 +64,7 @@ void ASPWeaponBase::ServerTryFire(ASPCharacter* Shooter,float ClientServerTimeSe
         DamageScale*=PenetrationDamageMultiplier;
     }
 
+    // Capsule-location rewind fallback. Production builds should replace this with full skeletal hitbox rewind.
     if(!CharacterHit && ClientServerTimeSeconds>0.f)
     {
         float BestDistance=LagCompensationRadius;

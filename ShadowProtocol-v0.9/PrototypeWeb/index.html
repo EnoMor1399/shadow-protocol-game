@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#090b0d">
+  <title>SHADOW PROTOCOL — Advanced Embassy Combat Build</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="shell">
+  <header class="topbar">
+    <div class="brand" aria-label="Shadow Protocol">
+      <div class="brandMark" aria-hidden="true"><i></i><i></i></div>
+      <div class="brandType"><div><strong>SHADOW</strong><span>PROTOCOL</span></div><small>EVERY MOVE IS CLASSIFIED.</small></div>
+    </div>
+    <div class="topStatus">
+      <span><i class="statusDot"></i> SPECTRE NET</span>
+      <span class="mono">EMBASSY // 2034</span>
+      <span class="classification">SECRET // D9</span><span id="envTop" class="envTop">EMBASSY // WEST SERVICE</span><span class="buildStatus">v0.9 // TACTICAL INTERACTION</span>
+    </div>
+  </header>
+
+  <main id="stage">
+    <div class="commandBackdrop" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div class="screenCorners" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <canvas id="game" width="1600" height="900" aria-label="Shadow Protocol game viewport"></canvas>
+    <div class="screenFX" aria-hidden="true"></div>
+    <div id="damageVignette" aria-hidden="true"></div>
+    <div id="muzzleFlash" aria-hidden="true"></div><div id="flashFX" class="flashFX" aria-hidden="true"></div><div id="smokeFX" class="smokeFX" aria-hidden="true"></div>
+    <div id="suppressionFX" class="suppressionFX" aria-hidden="true"></div>
+    <div id="lightFX" class="lightFX" aria-hidden="true"></div>
+    <div id="hitMarker" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+
+    <section id="menu" class="panel menuPanel show">
+      <div class="menuRail"><span>01</span><b>OPERATIONS</b><em></em><span>SP-01</span></div>
+      <div class="menuBody">
+        <div class="eyebrow"><span class="redDot"></span> DIRECTORATE NINE // TASK FORCE SPECTRE</div>
+        <h1>SHADOW <span>PROTOCOL</span></h1>
+        <p class="lead">Information is a weapon. Find the true objective, breach the compound, secure the encrypted package, and extract before Helix contains the operation.</p>
+
+        <div class="missionStrip">
+          <div><small>OPERATION</small><b>FIRST CONTACT</b></div>
+          <div><small>AO</small><b>EMBASSY</b></div>
+          <div><small>MODE</small><b>PROTOCOL</b></div>
+          <div><small>THREAT</small><b class="threat">HIGH</b></div>
+        </div>
+
+        <nav class="mainNav">
+          <button id="playBtn" class="primary"><span class="navIndex">01</span><span>DEPLOY // PROTOCOL TRAINING</span><kbd>ENTER</kbd></button>
+          <button data-info="operators"><span class="navIndex">02</span><span>OPERATORS</span><small>5 SPECIALIZATIONS</small></button>
+          <button data-info="armory"><span class="navIndex">03</span><span>ARMORY</span><small>FIELD LOADOUT</small></button>
+          <button data-info="intel"><span class="navIndex">04</span><span>INTELLIGENCE</span><small>MISSION DOSSIER</small></button>
+        </nav>
+
+        <div class="menuFooter">
+          <span><i class="pulse"></i> LOCAL TRAINING SERVER</span>
+          <span>BUILD 0.8 // ADVANCED EMBASSY + COMBAT FEEDBACK</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="rolePanel" class="panel rolePanel">
+      <div class="panelHeader">
+        <div><div class="eyebrow">PRE-MISSION // ROLE ASSIGNMENT</div><h2>SELECT SPECIALIZATION</h2></div>
+        <div class="stepCounter"><b>01</b><span>/ 03</span></div>
+      </div>
+      <p class="panelIntro">Equipment defines capability. There are no artificial combat powers—your role changes how the squad gathers intelligence, breaches, survives, and controls space.</p>
+      <div id="roles" class="roles"></div>
+      <div id="roleDetail" class="roleDetail"></div>
+      <div class="panelActions"><button id="planningBtn" class="primary">CONTINUE TO MATCH ROOM <span>→</span></button></div>
+    </section>
+
+
+    <section id="readyRoom" class="panel readyPanel">
+      <div class="panelHeader">
+        <div><div class="eyebrow">COMPETITIVE MATCH // 10 PLAYER LOBBY</div><h2>TACTICAL READY ROOM</h2></div>
+        <div class="stepCounter"><b>02</b><span>/ 03</span></div>
+      </div>
+      <div class="readyMeta">
+        <div><small>SERVER</small><b>ACC-01 // 34 MS</b></div>
+        <div><small>MODE</small><b>PROTOCOL // RANKED RULESET</b></div>
+        <div><small>MAP</small><b>EMBASSY</b></div>
+        <div id="networkState" class="networkState connected"><small>NETWORK</small><b>CONNECTED</b></div>
+        <div id="authState" class="networkState connected"><small>SESSION AUTH</small><b>VERIFIED</b></div>
+      </div>
+      <div class="readyTeams">
+        <div class="teamRoom d9"><div class="teamRoomHead"><span>DIRECTORATE NINE</span><b>5 / 5</b></div><div id="rosterD9" class="roster"></div></div>
+        <div class="vsMark">VS</div>
+        <div class="teamRoom helix"><div class="teamRoomHead"><span>HELIX NETWORK</span><b>5 / 5</b></div><div id="rosterHelix" class="roster"></div></div>
+      </div>
+      <div class="spawnSection">
+        <div><div class="eyebrow">ROUND 01 // SPAWN GROUP</div><h3>SELECT DEPLOYMENT POINT</h3></div>
+        <div id="spawnOptions" class="spawnOptions"></div>
+      </div>
+      <div class="readyActions">
+        <button id="readyBtn" class="readyToggle">MARK READY</button>
+        <button id="planningContinue" class="primary" disabled>CONTINUE TO TACTICAL PLANNING <span>→</span></button>
+      </div>
+      <div class="readyRule"><span>COMPETITIVE OBSERVER RULE</span><b>TEAM-FOLLOW ONLY DURING LIVE ROUNDS // FREE CAMERA LOCKED</b></div>
+    </section>
+
+    <section id="planning" class="panel planningPanel">
+      <div class="planningSidebar">
+        <div class="panelHeader compact"><div><div class="eyebrow">OPERATION MAP // EMBASSY</div><h2>PLAN INFILTRATION</h2></div><div class="stepCounter"><b>03</b><span>/ 03</span></div></div>
+        <p>Mark the approach before deployment. The plan remains available on your tactical device during the operation.</p>
+        <div class="briefGrid">
+          <div><small>PRIMARY</small><b>CAPTURE INTELLIGENCE</b></div>
+          <div><small>SECONDARY</small><b>DISABLE SURVEILLANCE</b></div>
+          <div><small>EXFIL</small><b>NORTH-EAST PERIMETER</b></div>
+        </div>
+        <div class="markerControl"><small>ACTIVE MARKER</small><button id="markerType">ENTRY</button><span>Click map to place // Right-click to undo</span></div>
+        <div class="legend"><span><i class="wall"></i>STRUCTURE</span><span><i class="door"></i>BREACH</span><span><i class="intel"></i>INTEL</span><span><i class="exfil"></i>EXFIL</span></div>
+        <button id="deployBtn" class="primary deploy">AUTHORIZE DEPLOYMENT <span>→</span></button>
+      </div>
+      <div class="mapFrame"><div class="mapHeader"><span>LIVE SITE PLAN // D9-SIGINT</span><span>GRID 20×20</span></div><canvas id="planMap" width="620" height="620"></canvas><div class="mapCoords">34°41'18"N // 18°22'04"E // SIMULATED</div></div>
+    </section>
+
+    <section id="infoPanel" class="panel infoPanel">
+      <button id="closeInfo" class="close" aria-label="Close">×</button>
+      <div id="infoContent"></div>
+    </section>
+
+    <div id="hud" class="hidden" aria-live="polite">
+      <div id="locationRibbon" class="locationRibbon"><small>EMBASSY // SECTOR</small><b id="locationName">WEST SERVICE</b><span id="surfaceName">CONCRETE</span></div>
+      <div class="hudTopLeft">
+        <div class="opBadge"><span>SP-01</span><b id="phase">INFILTRATION</b></div>
+        <div class="squadStatus">
+          <small id="squadFaction">SPECTRE // ALPHA</small>
+          <div><i class="alive"></i><span>YOU</span><b id="roleHud">BREACHER</b></div>
+          <div><i class="alive" id="bravoLife"></i><span id="bravoName">VANTA</span><b id="bravoState" class="statusAI">AI LINK</b></div>
+          <div><i class="alive" id="charlieLife"></i><span id="charlieName">ROOK</span><b id="charlieState" class="statusAI">AI LINK</b></div>
+          <div><i class="alive" id="deltaLife"></i><span id="deltaName">MERCY</span><b id="deltaState" class="statusAI">AI LINK</b></div>
+          <div><i class="alive" id="echoLife"></i><span id="echoName">LONGSHOT</span><b id="echoState" class="statusAI">AI LINK</b></div>
+        </div>
+      </div>
+
+      <div class="roundHeader">
+        <div class="team attacker"><small>DIRECTORATE NINE</small><b id="attackScore">0</b></div>
+        <div class="roundCore"><span id="roundLabel">ROUND 01</span><b id="roundState">PREPARATION</b><small id="roundMode">PROTOCOL // ATTACK</small><em id="matchPoint" class="matchPoint hidden">MATCH POINT</em></div>
+        <div class="team defender"><b id="defendScore">0</b><small>HELIX NETWORK</small></div>
+      </div>
+      <div id="teamAliveStrip" class="teamAliveStrip" aria-label="Team status"></div>
+      <div class="compassWrap"><div id="compass" class="compass"></div><div class="compassCaret"></div></div>
+
+      <div class="hudTopRight">
+        <div class="timerBlock"><small>MISSION CLOCK</small><b id="timer">15:00</b></div>
+        <div id="signatureBlock" class="signatureBlock"><small>TACTICAL SIGNATURE</small><div class="signatureBar"><i id="signatureFill"></i></div><span id="signatureText">COVERT</span></div><div class="alarmBlock"><small>HELIX ALERT</small><b id="alarmLevel">0</b><span id="alarmText">UNAWARE</span></div>
+      </div>
+
+      <div class="objectiveCard">
+        <div class="objectiveHead"><span>PRIMARY OBJECTIVE</span><i id="objectiveState">ACTIVE</i></div>
+        <b id="objective">LOCATE INTELLIGENCE SOURCE</b>
+        <small id="objectiveHint">Observe security systems and search for communications access.</small>
+      </div>
+
+      <div class="crosshair"><i></i><i></i><i></i><i></i><span></span></div>
+      <div id="prompt" class="interactionPrompt"></div>
+
+      <div class="hudBottomLeft">
+        <div class="vitalCard"><div class="vitalRing"><strong id="hp">100</strong><small>VITAL</small></div><div><b id="injury">STABLE</b><span id="stance">STANDING // NORMAL SIGNATURE</span></div></div>
+        <div class="staminaWrap"><small>ENDURANCE</small><div class="staminaBar"><i id="staminaFill"></i></div><span id="staminaText">100%</span></div><div class="quickKeys"><span><kbd>SHIFT</kbd>SPRINT</span><span><kbd>CTRL</kbd>CROUCH</span><span><kbd>Z/C</kbd>LEAN</span><span><kbd>TAB</kbd>TACTICAL</span><span><kbd>Q</kbd><b id="gadgetHud">BREACH KIT</b></span><span><kbd>G</kbd><b id="throwableHud">FLASH ×2</b></span><span><kbd>F</kbd>THROW</span><span><kbd>V</kbd>SQUAD</span><span><kbd>X</kbd>FORTIFY</span><span><kbd>RMB</kbd>ADS</span><span><kbd>SPACE</kbd>VAULT</span><span><kbd>I</kbd>INSPECT</span><span><kbd>Y</kbd>OPTIC</span></div>
+      </div>
+
+      <div class="hudBottomRight">
+        <div class="weaponName"><small>PRIMARY // AR-7C</small><b>SPECTRE CARBINE</b></div>
+        <div class="ammo"><strong id="ammo">30</strong><span>/ <b id="reserve">120</b></span></div>
+        <div id="reloadBar" class="reloadBar"><i></i></div>
+        <div class="fireMode"><span>FULL</span><span>5.56</span><span>30 RND</span><span id="opticState">REFLEX 1X</span><span id="weaponState">READY</span></div>
+      </div>
+
+      <div id="killFeed" class="killFeed"></div><div id="intelFeed" class="intelFeed"></div>
+      <div id="netTelemetry" class="netTelemetry"><span>AUTH <b>OK</b></span><span>SERVER <b>ACC-01</b></span><span>TICK <b>60</b></span><span>PING <b id="netPing">34 MS</b></span><span>LOSS <b id="netLoss">0.1%</b></span><span>SYNC <b id="netSync">LOCKED</b></span></div>
+      <div id="reconnectBanner" class="reconnectBanner hidden"><small>SECURE SESSION RESERVED</small><b>RECONNECTING // <span id="reconnectTimer">90</span>S</b><span>YOUR COMPETITIVE SLOT WILL BE HELD DURING THE GRACE WINDOW</span></div>
+      <div id="alertBanner" class="alertBanner"><span>CONTACT</span><b>HELIX ALERTED</b></div><div id="deploySplash" class="deploySplash hidden"><small>DIRECTORATE NINE // TASK FORCE SPECTRE</small><b>OPERATION FIRST CONTACT</b><span>EMBASSY // PROTOCOL</span></div>
+      <div id="overtimeBadge" class="overtimeBadge hidden">OVERTIME // OBJECTIVE ACTIVE</div><div id="phaseBanner" class="phaseBanner hidden"><small id="phaseBannerTop">ROUND 01 // ATTACK</small><b id="phaseBannerMain">ACTION PHASE</b><span id="phaseBannerSub">LOCATE // SECURE // EXTRACT</span></div><div class="classificationWatermark">SECRET // D9 // SPECTRE</div>
+    </div>
+
+    <div id="resumeOverlay" class="resumeOverlay hidden"><div><small>INPUT PAUSED</small><b>CLICK TO RESUME OPERATION</b><span>Pointer lock is required for mouse-look.</span></div></div>
+
+    <div id="mapOverlay" class="mapOverlay hidden">
+      <div class="deviceShell">
+        <div class="deviceTop"><div><small>SPECTRE TACTICAL DEVICE</small><b>OPERATIONAL MAP</b></div><span>TAB // CLOSE</span></div>
+        <div class="deviceGrid"><canvas id="miniMap" width="680" height="680"></canvas><aside><div><small>MISSION PHASE</small><b id="mapPhase">INFILTRATION</b></div><div><small>INTELLIGENCE</small><b id="mapIntel">0 / 1</b></div><div><small>SURVEILLANCE</small><b id="mapCameras">ONLINE</b></div><div><small>ACTIVE ROLE</small><b id="mapRole">BREACHER</b></div><div><small>CURRENT SECTOR</small><b id="mapSector">WEST SERVICE</b></div><div><small>SURFACE</small><b id="mapSurface">CONCRETE</b></div><p>Enemy positions appear only while a valid reconnaissance feed is active.</p></aside></div>
+      </div>
+    </div>
+
+    <section id="endScreen" class="panel endPanel">
+      <div class="eyebrow">OPERATION REVIEW // SPECTRE ARCHIVE</div>
+      <div class="endHero"><div><small>RESULT</small><h2 id="endTitle">MISSION COMPLETE</h2><p id="endReason"></p></div><div class="grade"><small>TACTICAL GRADE</small><b id="grade">A</b></div></div>
+      <div id="scoreboard" class="scoreboard"></div>
+      <div id="reviewStats" class="reviewStats"></div><div id="reviewHighlights" class="reviewHighlights"></div><div id="roundResult" class="roundResult"></div><div id="reviewTimeline" class="reviewTimeline"></div>
+      <div class="endActions"><button id="nextRoundBtn" class="primary">CONTINUE TO NEXT ROUND <span>→</span></button><button id="restartBtn">RETURN TO OPERATIONS</button></div>
+    </section>
+  </main>
+</div>
+<script src="game.js"></script>
+</body>
+</html>
