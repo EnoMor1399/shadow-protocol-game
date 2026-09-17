@@ -44,12 +44,13 @@ const compatibilityPayload = () => ({
 
 const SESSION_SECRET = process.env.SESSION_SIGNING_SECRET ?? 'dev-only-change-me';
 const SESSION_BOOTSTRAP_SECRET = process.env.SESSION_BOOTSTRAP_SECRET ?? 'dev-bootstrap-change-me';
-const MATCH_SERVER_SECRET = process.env.MATCH_SERVER_SECRET ?? 'dev-match-secret';
+const SERVER_REGISTRATION_SECRET = process.env.SERVER_REGISTRATION_SECRET ?? process.env.MATCH_SERVER_SECRET ?? 'dev-match-secret';
 const b64url=(value:string|Buffer)=>Buffer.from(value).toString('base64url');
 const sha256=(value:string)=>createHash('sha256').update(value).digest('hex');
 type SessionPayload={sid:string;uid:string;exp:number;region:string;build:string;protocol:string};
 type ConnectTarget={host:string;port:number};
 type RegisteredServerTarget=ConnectTarget&{nodeId:string;serverId:string;capacity:number;activeAllocations:number};
+type AuthenticatedServerNode={nodeId:string;serverId:string;region:string;networkBuild:string;status:string};
 function signSession(payload:Record<string,unknown>){
   const encoded=b64url(JSON.stringify(payload));
   const sig=createHmac('sha256',SESSION_SECRET).update(encoded).digest('base64url');
@@ -70,10 +71,42 @@ function bearer(req:any){const h=String(req.headers?.authorization??'');return h
 function incompatibleBuild(reply:any, receivedBuild:string|null){
   return reply.code(426).send({error:'client-build-incompatible',receivedBuild,...compatibilityPayload()});
 }
-function requireMatchServer(req:any, reply:any){
-  if(String(req.headers['x-match-server-secret']??'')!==MATCH_SERVER_SECRET){
-    reply.code(401).send({error:'match-server-auth-required'});
+function requireServerRegistrationBootstrap(req:any, reply:any){
+  if(String(req.headers['x-match-server-secret']??'')!==SERVER_REGISTRATION_SECRET){
+    reply.code(401).send({error:'server-registration-auth-required'});
     return false;
+  }
+  return true;
+}
+function secureHashMatches(storedHash:string,suppliedSecret:string){
+  const suppliedHash=sha256(suppliedSecret);
+  const stored=Buffer.from(storedHash);
+  const supplied=Buffer.from(suppliedHash);
+  return stored.length===supplied.length&&timingSafeEqual(stored,supplied);
+}
+async function requireNodeCredential(req:any,reply:any):Promise<AuthenticatedServerNode|null>{
+  const serverId=String(req.headers['x-sp-server-id']??'').trim();
+  const nodeCredential=String(req.headers['x-sp-node-credential']??'').trim();
+  if(!serverId||!nodeCredential){reply.code(401).send({error:'node-auth-required'});return null;}
+  if(!pool){reply.code(503).send({error:'database-not-configured'});return null;}
+  const r=await pool.query(`select id as node_id,server_id,region,network_build,status,credential_hash
+    from game_server_nodes where server_id=$1 and credential_revoked_at is null and status<>'offline'`,[serverId]);
+  if(!r.rowCount||!r.rows[0].credential_hash||!secureHashMatches(String(r.rows[0].credential_hash),nodeCredential)){
+    reply.code(401).send({error:'node-auth-required'});return null;
+  }
+  const node=r.rows[0];
+  return {nodeId:node.node_id,serverId:node.server_id,region:node.region,networkBuild:node.network_build,status:node.status};
+}
+async function requireMatchServer(req:any,reply:any):Promise<boolean>{
+  const node=await requireNodeCredential(req,reply);if(!node)return false;
+  const body=(req.body??{}) as Record<string,unknown>;
+  const requestedServerId=typeof body.serverId==='string'?body.serverId.trim():'';
+  if(requestedServerId&&requestedServerId!==node.serverId){reply.code(403).send({error:'node-identity-mismatch'});return false;}
+  const matchId=typeof body.matchId==='string'?body.matchId.trim():'';
+  if(matchId){
+    if(!z.string().uuid().safeParse(matchId).success){reply.code(400).send({error:'invalid-match-id'});return false;}
+    const owned=await pool!.query(`select 1 from server_allocations where match_id=$1 and node_id=$2 and status not in ('closed','failed') limit 1`,[matchId,node.nodeId]);
+    if(!owned.rowCount){reply.code(403).send({error:'match-node-ownership-required'});return false;}
   }
   return true;
 }
@@ -141,22 +174,24 @@ const serverRegistrationSchema=z.object({
   publicPort:z.number().int().min(1).max(65535),capacity:z.number().int().min(1).max(128).default(1)
 });
 app.post('/v1/servers/register',async(req,reply)=>{
-  if(!requireMatchServer(req,reply))return;
+  if(!requireServerRegistrationBootstrap(req,reply))return;
   const parsed=serverRegistrationSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(!pool)return reply.code(503).send({error:'database-not-configured'});
   if(!isBuildCompatible(parsed.data.networkBuild))return reply.code(409).send({error:'server-build-incompatible',receivedBuild:parsed.data.networkBuild,...compatibilityPayload()});
-  const r=await pool.query(`insert into game_server_nodes(server_id,region,network_build,public_host,public_port,status,capacity,last_heartbeat_at)
-    values($1,$2,$3,$4,$5,'ready',$6,now())
+  const nodeCredential=randomBytes(32).toString('base64url'),credentialHash=sha256(nodeCredential);
+  const r=await pool.query(`insert into game_server_nodes(server_id,region,network_build,public_host,public_port,status,capacity,last_heartbeat_at,credential_hash,credential_issued_at,credential_revoked_at)
+    values($1,$2,$3,$4,$5,'ready',$6,now(),$7,now(),null)
     on conflict(server_id) do update set region=excluded.region,network_build=excluded.network_build,public_host=excluded.public_host,
-      public_port=excluded.public_port,capacity=excluded.capacity,status='ready',last_heartbeat_at=now(),updated_at=now()
+      public_port=excluded.public_port,capacity=excluded.capacity,status='ready',last_heartbeat_at=now(),credential_hash=excluded.credential_hash,
+      credential_issued_at=now(),credential_revoked_at=null,updated_at=now()
     returning id as node_id,server_id,region,network_build,public_host,public_port,status,capacity,active_allocations,last_heartbeat_at`,
-    [parsed.data.serverId,parsed.data.region,parsed.data.networkBuild,parsed.data.publicHost,parsed.data.publicPort,parsed.data.capacity]);
-  return reply.send({...r.rows[0],heartbeatTtlMs:SERVER_HEARTBEAT_TTL_MS});
+    [parsed.data.serverId,parsed.data.region,parsed.data.networkBuild,parsed.data.publicHost,parsed.data.publicPort,parsed.data.capacity,credentialHash]);
+  return reply.send({...r.rows[0],heartbeatTtlMs:SERVER_HEARTBEAT_TTL_MS,nodeCredential});
 });
 
 const serverHeartbeatSchema=z.object({serverId:z.string().min(2).max(64),status:z.enum(['ready','draining']).optional()});
 app.post('/v1/servers/heartbeat',async(req,reply)=>{
-  if(!requireMatchServer(req,reply))return;
+  if(!(await requireMatchServer(req,reply)))return;
   const parsed=serverHeartbeatSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(!pool)return reply.code(503).send({error:'database-not-configured'});
   const r=await pool.query(`update game_server_nodes set last_heartbeat_at=now(),status=coalesce($2,status),updated_at=now()
@@ -167,7 +202,7 @@ app.post('/v1/servers/heartbeat',async(req,reply)=>{
 
 const serverNodeSchema=z.object({serverId:z.string().min(2).max(64)});
 app.post('/v1/servers/drain',async(req,reply)=>{
-  if(!requireMatchServer(req,reply))return;
+  if(!(await requireMatchServer(req,reply)))return;
   const parsed=serverNodeSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(!pool)return reply.code(503).send({error:'database-not-configured'});
   const r=await pool.query(`update game_server_nodes set status='draining',updated_at=now() where server_id=$1
@@ -178,7 +213,7 @@ app.post('/v1/servers/drain',async(req,reply)=>{
 
 const allocationReleaseSchema=z.object({allocationId:z.string().uuid(),matchId:z.string().uuid(),outcome:z.enum(['closed','failed']).default('closed')});
 app.post('/v1/servers/release-allocation',async(req,reply)=>{
-  if(!requireMatchServer(req,reply))return;
+  if(!(await requireMatchServer(req,reply)))return;
   const parsed=allocationReleaseSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(!pool)return reply.code(503).send({error:'database-not-configured'});
   const client=await pool.connect();
@@ -264,7 +299,7 @@ app.post('/v1/matches/allocate',async(req,reply)=>{
 
 const admissionSchema=z.object({allocationId:z.string().uuid(),matchId:z.string().uuid(),connectToken:z.string().min(24).max(256)});
 app.post('/v1/matches/admit',async(req,reply)=>{
-  if(!requireMatchServer(req,reply))return;
+  if(!(await requireMatchServer(req,reply)))return;
   const parsed=admissionSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(!pool)return reply.code(503).send({error:'database-not-configured'});
   const tokenHash=sha256(parsed.data.connectToken);
@@ -333,7 +368,7 @@ app.get('/v1/seasons/current', async (_req, reply) => {
 });
 
 app.post('/v1/anti-cheat/events', async (req, reply) => {
-  if(!requireMatchServer(req,reply))return;
+  if(!(await requireMatchServer(req,reply)))return;
   const s = z.object({ matchId:z.string().uuid(), userId:z.string().uuid(), signal:z.string().min(2).max(64), severity:z.number().int().min(1).max(5), evidence:z.record(z.unknown()).default({}) }).safeParse(req.body);
   if (!s.success) return reply.code(400).send({ error:s.error.flatten() });
   if (pool) await pool.query('insert into anti_cheat_events(match_id,user_id,signal,severity,evidence) values($1,$2,$3,$4,$5)', [s.data.matchId,s.data.userId,s.data.signal,s.data.severity,s.data.evidence]);
@@ -345,7 +380,7 @@ const matchEventSchema = z.object({
   gameTimeMs:z.number().int().min(0), position:z.object({x:z.number(),y:z.number(),z:z.number()}).optional(), payload:z.record(z.unknown()).default({})
 });
 app.post('/v1/matches/events', async (req, reply) => {
-  if(!requireMatchServer(req,reply))return;
+  if(!(await requireMatchServer(req,reply)))return;
   const parsed=matchEventSchema.safeParse(req.body);
   if(!parsed.success) return reply.code(400).send({error:parsed.error.flatten()});
   if(pool) await pool.query('insert into match_events(match_id,user_id,event_type,game_time_ms,position,payload) values($1,$2,$3,$4,$5,$6)', [parsed.data.matchId,parsed.data.userId??null,parsed.data.eventType,parsed.data.gameTimeMs,parsed.data.position??null,parsed.data.payload]);
@@ -358,7 +393,7 @@ const roundResultSchema = z.object({
   startedAt:z.string().datetime().optional(), endedAt:z.string().datetime().optional(), objectiveSiteCode:z.string().max(64).nullable().optional(), objectiveState:z.record(z.unknown()).default({})
 });
 app.post('/v1/matches/rounds', async (req, reply) => {
-  if(!requireMatchServer(req,reply))return;
+  if(!(await requireMatchServer(req,reply)))return;
   const parsed=roundResultSchema.safeParse(req.body);
   if(!parsed.success) return reply.code(400).send({error:parsed.error.flatten()});
   if(pool) await pool.query(`insert into match_rounds(match_id,round_number,attacking_team,defending_team,winner_team,outcome_reason,started_at,ended_at,objective_site_code,objective_state)
@@ -374,7 +409,7 @@ const equipmentEventSchema=z.object({
   affectedEntities:z.array(z.string()).default([]),gameTimeMs:z.number().int().min(0)
 });
 app.post('/v1/matches/equipment-events', async (req, reply) => {
-  if(!requireMatchServer(req,reply))return;
+  if(!(await requireMatchServer(req,reply)))return;
   const parsed=equipmentEventSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(pool) await pool.query('insert into tactical_equipment_events(match_id,round_number,user_id,equipment_type,position,affected_entities,game_time_ms) values($1,$2,$3,$4,$5,$6,$7)',
     [parsed.data.matchId,parsed.data.roundNumber,parsed.data.userId??null,parsed.data.equipmentType,parsed.data.position??null,parsed.data.affectedEntities,parsed.data.gameTimeMs]);
@@ -387,7 +422,7 @@ const playerSlotSchema=z.object({
   spawnGroup:z.string().max(64).nullable().optional(),connectionState:z.enum(['connected','reconnecting','disconnected']).default('connected'),ready:z.boolean().default(false),reconnectTokenHash:z.string().max(256).nullable().optional(),reconnectDeadline:z.string().datetime().nullable().optional()
 });
 app.post('/v1/matches/player-slots', async (req,reply)=>{
-  if(!requireMatchServer(req,reply))return;
+  if(!(await requireMatchServer(req,reply)))return;
   const parsed=playerSlotSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(pool)await pool.query(`insert into match_player_slots(match_id,round_number,slot_index,user_id,team,tactical_side,spawn_group,connection_state,ready,reconnect_token_hash,reconnect_deadline)
     values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) on conflict(match_id,round_number,slot_index) do update set user_id=excluded.user_id,team=excluded.team,tactical_side=excluded.tactical_side,spawn_group=excluded.spawn_group,connection_state=excluded.connection_state,ready=excluded.ready,reconnect_token_hash=excluded.reconnect_token_hash,reconnect_deadline=excluded.reconnect_deadline`,
@@ -401,7 +436,7 @@ const fortificationEventSchema=z.object({
   position:z.object({x:z.number(),y:z.number(),z:z.number()}),healthRemaining:z.number().min(0).max(10000).nullable().optional(),gameTimeMs:z.number().int().min(0)
 });
 app.post('/v1/matches/fortification-events',async(req,reply)=>{
-  if(!requireMatchServer(req,reply))return;
+  if(!(await requireMatchServer(req,reply)))return;
   const parsed=fortificationEventSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(pool)await pool.query('insert into fortification_events(match_id,round_number,user_id,action,fortification_type,position,health_remaining,game_time_ms) values($1,$2,$3,$4,$5,$6,$7,$8)',
     [parsed.data.matchId,parsed.data.roundNumber,parsed.data.userId??null,parsed.data.action,parsed.data.fortificationType,parsed.data.position,parsed.data.healthRemaining??null,parsed.data.gameTimeMs]);
@@ -414,7 +449,7 @@ const ballisticEventSchema=z.object({
   position:z.object({x:z.number(),y:z.number(),z:z.number()}).nullable().optional(),payload:z.record(z.unknown()).default({}),gameTimeMs:z.number().int().min(0)
 });
 app.post('/v1/matches/ballistic-events',async(req,reply)=>{
-  if(!requireMatchServer(req,reply))return;
+  if(!(await requireMatchServer(req,reply)))return;
   const parsed=ballisticEventSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(pool)await pool.query('insert into ballistic_events(match_id,round_number,shooter_user_id,event_type,material,target_user_id,position,payload,game_time_ms) values($1,$2,$3,$4,$5,$6,$7,$8,$9)',
     [parsed.data.matchId,parsed.data.roundNumber,parsed.data.shooterUserId??null,parsed.data.eventType,parsed.data.material??null,parsed.data.targetUserId??null,parsed.data.position??null,parsed.data.payload,parsed.data.gameTimeMs]);
@@ -460,7 +495,7 @@ const killFeedSchema=z.object({
   matchId:z.string().uuid(),roundNumber:z.number().int().min(1).max(9),killerUserId:z.string().uuid().nullable().optional(),victimUserId:z.string().uuid().nullable().optional(),killerTeam:z.string().min(2).max(32),victimTeam:z.string().min(2).max(32),weaponCode:z.string().max(64).nullable().optional(),headshot:z.boolean().default(false),gameTimeMs:z.number().int().min(0)
 });
 app.post('/v1/matches/kill-feed',async(req,reply)=>{
-  if(!requireMatchServer(req,reply))return;
+  if(!(await requireMatchServer(req,reply)))return;
   const parsed=killFeedSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(pool)await pool.query('insert into kill_feed_events(match_id,round_number,killer_user_id,victim_user_id,killer_team,victim_team,weapon_code,headshot,game_time_ms) values($1,$2,$3,$4,$5,$6,$7,$8,$9)',
     [parsed.data.matchId,parsed.data.roundNumber,parsed.data.killerUserId??null,parsed.data.victimUserId??null,parsed.data.killerTeam,parsed.data.victimTeam,parsed.data.weaponCode??null,parsed.data.headshot,parsed.data.gameTimeMs]);
@@ -469,7 +504,7 @@ app.post('/v1/matches/kill-feed',async(req,reply)=>{
 
 const overtimeSchema=z.object({matchId:z.string().uuid(),roundNumber:z.number().int().min(1).max(9),triggerReason:z.string().min(2).max(160),durationSeconds:z.number().int().min(1).max(120).default(30)});
 app.post('/v1/matches/overtime',async(req,reply)=>{
-  if(!requireMatchServer(req,reply))return;
+  if(!(await requireMatchServer(req,reply)))return;
   const parsed=overtimeSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(pool)await pool.query('insert into match_overtime_events(match_id,round_number,trigger_reason,duration_seconds) values($1,$2,$3,$4)',[parsed.data.matchId,parsed.data.roundNumber,parsed.data.triggerReason,parsed.data.durationSeconds]);
   return reply.code(202).send({accepted:true,authority:'dedicated-server'});
@@ -481,7 +516,7 @@ const environmentEventSchema=z.object({
   surfaceProfile:z.string().max(32).nullable().optional(),position:z.record(z.any()).nullable().optional(),payload:z.record(z.any()).default({}),gameTimeMs:z.number().int().min(0)
 });
 app.post('/v1/matches/environment-events',async(req,reply)=>{
-  if(!requireMatchServer(req,reply))return;
+  if(!(await requireMatchServer(req,reply)))return;
   const parsed=environmentEventSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(pool)await pool.query('insert into environment_events(match_id,round_number,user_id,event_type,sector_code,surface_profile,position,payload,game_time_ms) values($1,$2,$3,$4,$5,$6,$7,$8,$9)',[parsed.data.matchId,parsed.data.roundNumber,parsed.data.userId??null,parsed.data.eventType,parsed.data.sectorCode??null,parsed.data.surfaceProfile??null,parsed.data.position??null,parsed.data.payload,parsed.data.gameTimeMs]);
   return reply.code(202).send({accepted:true,authority:'dedicated-server'});
@@ -494,7 +529,7 @@ const combatEventSchema=z.object({
   serverShotTimeMs:z.number().int().min(0),friendlyFire:z.boolean().default(false),payload:z.record(z.unknown()).default({})
 });
 app.post('/v1/matches/combat-events',async(req,reply)=>{
-  if(!requireMatchServer(req,reply))return;
+  if(!(await requireMatchServer(req,reply)))return;
   const parsed=combatEventSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(pool)await pool.query(`insert into combat_events(match_id,round_number,shooter_user_id,victim_user_id,event_type,weapon_code,damage,body_zone,client_shot_age_ms,server_shot_time_ms,friendly_fire,payload) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,[parsed.data.matchId,parsed.data.roundNumber,parsed.data.shooterUserId,parsed.data.victimUserId,parsed.data.eventType,parsed.data.weaponCode,parsed.data.damage,parsed.data.bodyZone,parsed.data.clientShotAgeMs,parsed.data.serverShotTimeMs,parsed.data.friendlyFire,parsed.data.payload]);
   return reply.code(202).send({accepted:true,authority:'dedicated-server'});
@@ -516,7 +551,7 @@ const tacticalInteractionSchema=z.object({
   objectCode:z.string().max(80).optional(),sectorCode:z.string().max(80).optional(),position:z.record(z.any()).optional(),payload:z.record(z.any()).default({}),gameTimeMs:z.number().int().min(0)
 });
 app.post('/v1/matches/tactical-interactions',async(req,reply)=>{
-  if(!requireMatchServer(req,reply))return;
+  if(!(await requireMatchServer(req,reply)))return;
   const parsed=tacticalInteractionSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(pool)await pool.query('insert into tactical_interaction_events(match_id,round_number,user_id,event_type,object_code,sector_code,position,payload,game_time_ms) values($1,$2,$3,$4,$5,$6,$7,$8,$9)',[parsed.data.matchId,parsed.data.roundNumber,parsed.data.userId??null,parsed.data.eventType,parsed.data.objectCode??null,parsed.data.sectorCode??null,parsed.data.position??null,parsed.data.payload,parsed.data.gameTimeMs]);
   return reply.code(202).send({accepted:true,authority:'dedicated-server'});

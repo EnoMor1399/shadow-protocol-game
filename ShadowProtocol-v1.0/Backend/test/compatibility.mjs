@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 const PORT = 18081;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const BOOTSTRAP_SECRET = 'ci-bootstrap-secret';
-const MATCH_SERVER_SECRET = 'ci-match-server-secret';
+const SERVER_REGISTRATION_SECRET = 'ci-server-registration-secret';
 const GAME_SERVER_HOST = '127.0.0.1';
 const GAME_SERVER_PORT = 7777;
 const TEST_USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -59,7 +59,7 @@ before(async () => {
       REDIS_URL: '',
       SESSION_SIGNING_SECRET: 'ci-session-signing-secret',
       SESSION_BOOTSTRAP_SECRET: BOOTSTRAP_SECRET,
-      MATCH_SERVER_SECRET,
+      SERVER_REGISTRATION_SECRET,
       ACCEPTED_NETWORK_BUILDS: 'SP-1.0.1',
       GAME_SERVER_PUBLIC_HOST: GAME_SERVER_HOST,
       GAME_SERVER_PUBLIC_PORT: String(GAME_SERVER_PORT)
@@ -181,7 +181,7 @@ test('requires an authenticated compatible session for matchmaking', async () =>
   assert.equal(payload.region, 'acc');
 });
 
-test('rejects public clients from authoritative match telemetry', async () => {
+test('fails authoritative match telemetry closed without PostgreSQL-backed node identity', async () => {
   const eventBody = {
     matchId: TEST_MATCH_ID,
     eventType: 'objective_state',
@@ -195,18 +195,19 @@ test('rejects public clients from authoritative match telemetry', async () => {
     body: JSON.stringify(eventBody)
   });
   assert.equal(publicResponse.status, 401);
-  assert.equal((await publicResponse.json()).error, 'match-server-auth-required');
+  assert.equal((await publicResponse.json()).error, 'node-auth-required');
 
-  const serverResponse = await fetch(`${BASE_URL}/v1/matches/events`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-match-server-secret': MATCH_SERVER_SECRET
-    },
-    body: JSON.stringify(eventBody)
+  const bootstrapOnly = await fetch(`${BASE_URL}/v1/matches/events`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-match-server-secret': SERVER_REGISTRATION_SECRET }, body: JSON.stringify(eventBody)
   });
-  assert.equal(serverResponse.status, 202);
-  assert.equal((await serverResponse.json()).authority, 'dedicated-server');
+  assert.equal(bootstrapOnly.status, 401);
+  assert.equal((await bootstrapOnly.json()).error, 'node-auth-required');
+
+  const unbackedNode = await fetch(`${BASE_URL}/v1/matches/events`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-sp-server-id': 'ACC-UNBACKED', 'x-sp-node-credential': 'not-a-real-node-credential' }, body: JSON.stringify(eventBody)
+  });
+  assert.equal(unbackedNode.status, 503);
+  assert.equal((await unbackedNode.json()).error, 'database-not-configured');
 });
 
 test('fails reconnect and ready-state ownership checks closed without PostgreSQL', async () => {

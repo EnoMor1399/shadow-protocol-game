@@ -8,7 +8,7 @@ const PORT = 18082;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const DATABASE_URL = process.env.DATABASE_URL;
 const BOOTSTRAP_SECRET = 'ci-postgres-bootstrap-secret';
-const MATCH_SERVER_SECRET = 'ci-postgres-match-secret';
+const SERVER_REGISTRATION_SECRET = 'ci-postgres-registration-secret';
 const PRIMARY_SERVER_ID = 'ACC-PRIMARY';
 const PRIMARY_SERVER_HOST = '10.10.0.10';
 const PRIMARY_SERVER_PORT = 7781;
@@ -32,15 +32,11 @@ async function waitForServer() {
   throw lastError ?? new Error('Shadow Protocol PostgreSQL integration backend did not become ready.');
 }
 
-async function serverPost(path, body) {
-  return fetch(`${BASE_URL}${path}`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-match-server-secret': MATCH_SERVER_SECRET
-    },
-    body: JSON.stringify(body)
-  });
+async function bootstrapPost(path, body) {
+  return fetch(`${BASE_URL}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-match-server-secret': SERVER_REGISTRATION_SECRET }, body: JSON.stringify(body) });
+}
+async function nodePost(path, body, serverId, nodeCredential) {
+  return fetch(`${BASE_URL}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-sp-server-id': serverId, 'x-sp-node-credential': nodeCredential }, body: JSON.stringify(body) });
 }
 
 before(async () => {
@@ -63,7 +59,7 @@ before(async () => {
       REDIS_URL: '',
       SESSION_SIGNING_SECRET: 'ci-postgres-session-signing-secret',
       SESSION_BOOTSTRAP_SECRET: BOOTSTRAP_SECRET,
-      MATCH_SERVER_SECRET,
+      SERVER_REGISTRATION_SECRET,
       ACCEPTED_NETWORK_BUILDS: 'SP-1.0.1',
       SERVER_HEARTBEAT_TTL_MS: '30000',
       GAME_SERVER_PUBLIC_HOST: '',
@@ -94,7 +90,7 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   });
   assert.equal(publicRegistration.status, 401);
 
-  const primaryRegistration = await serverPost('/v1/servers/register', {
+  const primaryRegistration = await bootstrapPost('/v1/servers/register', {
     serverId: PRIMARY_SERVER_ID,
     region: 'acc',
     networkBuild: 'SP-1.0.1',
@@ -103,8 +99,10 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
     capacity: 1
   });
   assert.equal(primaryRegistration.status, 200);
+  const primaryNode = await primaryRegistration.json();
+  assert.ok(primaryNode.nodeCredential.length >= 32);
 
-  const drainRegistration = await serverPost('/v1/servers/register', {
+  const drainRegistration = await bootstrapPost('/v1/servers/register', {
     serverId: 'ACC-DRAIN',
     region: 'acc',
     networkBuild: 'SP-1.0.1',
@@ -113,10 +111,12 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
     capacity: 10
   });
   assert.equal(drainRegistration.status, 200);
-  const drainResponse = await serverPost('/v1/servers/drain', { serverId: 'ACC-DRAIN' });
+  const drainNode = await drainRegistration.json();
+  assert.ok(drainNode.nodeCredential.length >= 32);
+  const drainResponse = await nodePost('/v1/servers/drain', { serverId: 'ACC-DRAIN' }, 'ACC-DRAIN', drainNode.nodeCredential);
   assert.equal(drainResponse.status, 200);
 
-  const staleRegistration = await serverPost('/v1/servers/register', {
+  const staleRegistration = await bootstrapPost('/v1/servers/register', {
     serverId: 'ACC-STALE',
     region: 'acc',
     networkBuild: 'SP-1.0.1',
@@ -125,6 +125,8 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
     capacity: 10
   });
   assert.equal(staleRegistration.status, 200);
+  const staleNode = await staleRegistration.json();
+  assert.ok(staleNode.nodeCredential.length >= 32);
   await db.query(`update game_server_nodes set last_heartbeat_at=now()-interval '2 minutes' where server_id='ACC-STALE'`);
 
   const sessionResponse = await fetch(`${BASE_URL}/v1/auth/game-session`, {
@@ -174,8 +176,10 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   assert.equal(persistedAllocation.rows[0].connect_token_consumed_at, null);
   assert.notEqual(persistedAllocation.rows[0].connect_token_hash, allocation.connectToken);
 
-  const primaryLoad = await db.query(`select active_allocations from game_server_nodes where server_id=$1`, [PRIMARY_SERVER_ID]);
+  const primaryLoad = await db.query(`select active_allocations,credential_hash from game_server_nodes where server_id=$1`, [PRIMARY_SERVER_ID]);
   assert.equal(Number(primaryLoad.rows[0].active_allocations), 1);
+  assert.ok(primaryLoad.rows[0].credential_hash);
+  assert.notEqual(primaryLoad.rows[0].credential_hash, primaryNode.nodeCredential);
 
   const saturatedResponse = await fetch(`${BASE_URL}/v1/matches/allocate`, {
     method: 'POST',
@@ -199,10 +203,13 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   });
   assert.equal(publicAdmission.status, 401);
 
-  const deniedAdmission = await serverPost('/v1/matches/admit', { ...admissionBody, connectToken: 'wrong-token-value-that-is-long-enough' });
+  const bootstrapAdmission = await fetch(`${BASE_URL}/v1/matches/admit`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-match-server-secret': SERVER_REGISTRATION_SECRET }, body: JSON.stringify(admissionBody) });
+  assert.equal(bootstrapAdmission.status, 401);
+  const crossNodeAdmission = await nodePost('/v1/matches/admit', admissionBody, 'ACC-DRAIN', drainNode.nodeCredential);
+  assert.equal(crossNodeAdmission.status, 403);
+  const deniedAdmission = await nodePost('/v1/matches/admit', { ...admissionBody, connectToken: 'wrong-token-value-that-is-long-enough' }, PRIMARY_SERVER_ID, primaryNode.nodeCredential);
   assert.equal(deniedAdmission.status, 403);
-
-  const admissionResponse = await serverPost('/v1/matches/admit', admissionBody);
+  const admissionResponse = await nodePost('/v1/matches/admit', admissionBody, PRIMARY_SERVER_ID, primaryNode.nodeCredential);
   assert.equal(admissionResponse.status, 200);
   const admission = await admissionResponse.json();
   assert.equal(admission.admitted, true);
@@ -212,7 +219,7 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   assert.equal(admission.networkBuild, 'SP-1.0.1');
   assert.equal(admission.authority, 'dedicated-server');
 
-  const replayAdmission = await serverPost('/v1/matches/admit', admissionBody);
+  const replayAdmission = await nodePost('/v1/matches/admit', admissionBody, PRIMARY_SERVER_ID, primaryNode.nodeCredential);
   assert.equal(replayAdmission.status, 403);
 
   const consumedAllocation = await db.query(
@@ -222,7 +229,7 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   assert.equal(consumedAllocation.rows[0].status, 'live');
   assert.ok(consumedAllocation.rows[0].connect_token_consumed_at);
 
-  const slotResponse = await serverPost('/v1/matches/player-slots', {
+  const slotResponse = await nodePost('/v1/matches/player-slots', {
     matchId: allocation.matchId,
     roundNumber: 1,
     slotIndex: 0,
@@ -232,8 +239,12 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
     spawnGroup: 'ALPHA',
     connectionState: 'connected',
     ready: false
-  });
+  }, PRIMARY_SERVER_ID, primaryNode.nodeCredential);
   assert.equal(slotResponse.status, 202);
+  const crossNodeTelemetry = await nodePost('/v1/anti-cheat/events', { matchId: allocation.matchId, userId: TEST_USER_ID, signal: 'integration-cross-node', severity: 1, evidence: {} }, 'ACC-DRAIN', drainNode.nodeCredential);
+  assert.equal(crossNodeTelemetry.status, 403);
+  const ownedTelemetry = await nodePost('/v1/anti-cheat/events', { matchId: allocation.matchId, userId: TEST_USER_ID, signal: 'integration-owned-node', severity: 1, evidence: {} }, PRIMARY_SERVER_ID, primaryNode.nodeCredential);
+  assert.equal(ownedTelemetry.status, 202);
 
   const readyResponse = await fetch(`${BASE_URL}/v1/matches/ready-state`, {
     method: 'POST',
@@ -310,11 +321,13 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   assert.equal(restoredSlot.rows[0].reconnect_token_hash, null);
   assert.equal(restoredSlot.rows[0].reconnect_deadline, null);
 
-  const releaseResponse = await serverPost('/v1/servers/release-allocation', {
+  const crossNodeRelease = await nodePost('/v1/servers/release-allocation', { allocationId: allocation.allocationId, matchId: allocation.matchId, outcome: 'closed' }, 'ACC-DRAIN', drainNode.nodeCredential);
+  assert.equal(crossNodeRelease.status, 403);
+  const releaseResponse = await nodePost('/v1/servers/release-allocation', {
     allocationId: allocation.allocationId,
     matchId: allocation.matchId,
     outcome: 'closed'
-  });
+  }, PRIMARY_SERVER_ID, primaryNode.nodeCredential);
   assert.equal(releaseResponse.status, 200);
   const release = await releaseResponse.json();
   assert.equal(release.released, true);
