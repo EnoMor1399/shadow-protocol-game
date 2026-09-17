@@ -111,7 +111,9 @@ docker compose up -d
 
 Apply `db/schema.sql` to PostgreSQL before starting persistent services. Replace all development secrets before any production deployment.
 
-The current backend service/protocol generation remains `0.7.0`. v1.0.1 deliberately does **not** rename that service version without first wiring `SP-1.0.1` into authenticated game-session and server-allocation compatibility enforcement.
+The backend protocol is now **`0.8.0`** and server-owned compatibility enforcement is active. The default accepted network build is **`SP-1.0.1`**. Authenticated session creation rejects unsupported builds with HTTP `426`, signed sessions carry build/protocol identity, and match allocation validates both values again before reserving a server. `ACCEPTED_NETWORK_BUILDS` may be used for an explicit controlled rollout window.
+
+Compatibility metadata is exposed through `/health`, `/v1/compatibility`, authenticated session/allocation responses, reconnect responses and the WebSocket hello payload.
 
 ## Documentation
 
@@ -127,17 +129,18 @@ Start with:
 
 ## Production validation boundary
 
-The browser v1.0.1 patch has been syntax-checked independently, but the Unreal additions still require a full Unreal Engine environment for Unreal Header Tool validation, C++ compilation, PIE, packaged-client testing and dedicated-server multiplayer testing.
+The browser v1.0.1 patch has been syntax-checked independently. Backend protocol/build enforcement is implemented at source level and should be validated by CI/typecheck plus configured integration testing. The Unreal additions still require a full Unreal Engine environment for Unreal Header Tool validation, C++ compilation, PIE, packaged-client testing and dedicated-server multiplayer testing.
 
 Production content still to author includes final Embassy geometry, skeletal meshes and first-person arms, animation blueprints, UMG production widgets, Niagara effects, MetaSounds/spatial audio, physical material/destruction profiles, nav meshes, online subsystem integration, anti-cheat integration and 10-client network soak testing.
 
 ## Development path after v1.0.1
 
 The next production milestones are:
-1. compile and integrate `USPBuildInfoLibrary` into UMG/session code;
-2. enforce server-owned client/server build compatibility during authenticated session allocation;
-3. author the production Embassy map and objective sites;
-4. convert browser diagnostics and settings language into UMG widgets;
-5. add final first-person character/weapon animation and spatial audio;
-6. perform real dedicated-server 5v5 replication, reconnect and latency testing;
-7. expand from the hardened vertical slice toward Alpha content.
+1. compile and integrate `USPBuildInfoLibrary` into UMG/online-session code;
+2. connect the UE client to compatibility/session/allocation failure handling;
+3. add automated backend compatibility tests for accepted, rejected, expired and reconnecting sessions;
+4. author the production Embassy map and objective sites;
+5. convert browser diagnostics and settings language into UMG widgets;
+6. add final first-person character/weapon animation and spatial audio;
+7. perform real dedicated-server 5v5 replication, reconnect and latency testing;
+8. expand from the hardened vertical slice toward Alpha content.
