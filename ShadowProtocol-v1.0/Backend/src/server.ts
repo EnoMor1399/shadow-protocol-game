@@ -22,6 +22,10 @@ const SESSION_TTL_SECONDS = Math.floor(SESSION_TTL_MS / 1000);
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const GAME_SERVER_PUBLIC_HOST = (process.env.GAME_SERVER_PUBLIC_HOST ?? (IS_PRODUCTION ? '' : '127.0.0.1')).trim();
 const GAME_SERVER_PUBLIC_PORT = Number(process.env.GAME_SERVER_PUBLIC_PORT ?? (IS_PRODUCTION ? '0' : '7777'));
+const heartbeatTtlCandidate = Number(process.env.SERVER_HEARTBEAT_TTL_MS ?? 30_000);
+const SERVER_HEARTBEAT_TTL_MS = Number.isFinite(heartbeatTtlCandidate)
+  ? Math.min(300_000, Math.max(5_000, Math.trunc(heartbeatTtlCandidate)))
+  : 30_000;
 const ACCEPTED_NETWORK_BUILDS = new Set(
   (process.env.ACCEPTED_NETWORK_BUILDS ?? NETWORK_BUILD)
     .split(',')
@@ -45,6 +49,7 @@ const b64url=(value:string|Buffer)=>Buffer.from(value).toString('base64url');
 const sha256=(value:string)=>createHash('sha256').update(value).digest('hex');
 type SessionPayload={sid:string;uid:string;exp:number;region:string;build:string;protocol:string};
 type ConnectTarget={host:string;port:number};
+type RegisteredServerTarget=ConnectTarget&{nodeId:string;serverId:string;capacity:number;activeAllocations:number};
 function signSession(payload:Record<string,unknown>){
   const encoded=b64url(JSON.stringify(payload));
   const sig=createHmac('sha256',SESSION_SECRET).update(encoded).digest('base64url');
@@ -78,16 +83,122 @@ function requireCompatibleSession(req:any, reply:any):SessionPayload|null{
   if(!isBuildCompatible(session.build)||session.protocol!==BACKEND_PROTOCOL_VERSION){incompatibleBuild(reply,session.build);return null;}
   return session;
 }
-function requireConnectTarget(reply:any):ConnectTarget|null{
-  if(!GAME_SERVER_PUBLIC_HOST||!Number.isInteger(GAME_SERVER_PUBLIC_PORT)||GAME_SERVER_PUBLIC_PORT<1||GAME_SERVER_PUBLIC_PORT>65535){
-    reply.code(503).send({error:'game-server-connect-target-not-configured'});
-    return null;
-  }
+function getStaticConnectTarget():ConnectTarget|null{
+  if(!GAME_SERVER_PUBLIC_HOST||!Number.isInteger(GAME_SERVER_PUBLIC_PORT)||GAME_SERVER_PUBLIC_PORT<1||GAME_SERVER_PUBLIC_PORT>65535)return null;
   return {host:GAME_SERVER_PUBLIC_HOST,port:GAME_SERVER_PUBLIC_PORT};
 }
+function requireConnectTarget(reply:any):ConnectTarget|null{
+  const target=getStaticConnectTarget();
+  if(!target){reply.code(503).send({error:'game-server-connect-target-not-configured'});return null;}
+  return target;
+}
+async function cleanupExpiredServerReservations(client:any){
+  await client.query(`with expired as (
+    update server_allocations
+    set status='failed',ended_at=coalesce(ended_at,now())
+    where node_id is not null and status in ('reserved','starting','ready') and expires_at<=now()
+    returning node_id
+  ), released as (
+    select node_id,count(*)::int as release_count from expired where node_id is not null group by node_id
+  )
+  update game_server_nodes n
+  set active_allocations=greatest(0,n.active_allocations-r.release_count),updated_at=now()
+  from released r where n.id=r.node_id`);
+}
+async function reserveRegisteredServer(client:any,region:string,build:string):Promise<RegisteredServerTarget|null>{
+  for(let attempt=0;attempt<3;attempt+=1){
+    const r=await client.query(`with candidate as (
+      select id from game_server_nodes
+      where region=$1 and network_build=$2 and status='ready'
+        and last_heartbeat_at>now()-($3::double precision*interval '1 millisecond')
+        and active_allocations<capacity
+      order by active_allocations::numeric/nullif(capacity,0),last_heartbeat_at desc,server_id
+      limit 1
+    )
+    update game_server_nodes n
+    set active_allocations=n.active_allocations+1,updated_at=now()
+    from candidate c
+    where n.id=c.id and n.active_allocations<n.capacity
+    returning n.id as node_id,n.server_id,n.public_host,n.public_port,n.capacity,n.active_allocations`,[region,build,SERVER_HEARTBEAT_TTL_MS]);
+    if(r.rowCount){
+      const node=r.rows[0];
+      return {nodeId:node.node_id,serverId:node.server_id,host:node.public_host,port:Number(node.public_port),capacity:Number(node.capacity),activeAllocations:Number(node.active_allocations)};
+    }
+  }
+  return null;
+}
 
-app.get('/health', async () => ({ service: 'shadow-protocol-backend', ok: true, version: BACKEND_PROTOCOL_VERSION, ...compatibilityPayload() }));
+app.get('/health', async () => ({
+  service: 'shadow-protocol-backend', ok: true, version: BACKEND_PROTOCOL_VERSION,
+  serverRegistry: { enabled:Boolean(pool), heartbeatTtlMs:SERVER_HEARTBEAT_TTL_MS, productionRequiresHealthyNode:IS_PRODUCTION },
+  ...compatibilityPayload()
+}));
 app.get('/v1/compatibility', async () => compatibilityPayload());
+
+const serverRegistrationSchema=z.object({
+  serverId:z.string().min(2).max(64).regex(/^[A-Za-z0-9][A-Za-z0-9._-]+$/),
+  region:z.string().min(2).max(16),networkBuild:z.string().min(2).max(32),publicHost:z.string().trim().min(1).max(255),
+  publicPort:z.number().int().min(1).max(65535),capacity:z.number().int().min(1).max(128).default(1)
+});
+app.post('/v1/servers/register',async(req,reply)=>{
+  if(!requireMatchServer(req,reply))return;
+  const parsed=serverRegistrationSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
+  if(!pool)return reply.code(503).send({error:'database-not-configured'});
+  if(!isBuildCompatible(parsed.data.networkBuild))return reply.code(409).send({error:'server-build-incompatible',receivedBuild:parsed.data.networkBuild,...compatibilityPayload()});
+  const r=await pool.query(`insert into game_server_nodes(server_id,region,network_build,public_host,public_port,status,capacity,last_heartbeat_at)
+    values($1,$2,$3,$4,$5,'ready',$6,now())
+    on conflict(server_id) do update set region=excluded.region,network_build=excluded.network_build,public_host=excluded.public_host,
+      public_port=excluded.public_port,capacity=excluded.capacity,status='ready',last_heartbeat_at=now(),updated_at=now()
+    returning id as node_id,server_id,region,network_build,public_host,public_port,status,capacity,active_allocations,last_heartbeat_at`,
+    [parsed.data.serverId,parsed.data.region,parsed.data.networkBuild,parsed.data.publicHost,parsed.data.publicPort,parsed.data.capacity]);
+  return reply.send({...r.rows[0],heartbeatTtlMs:SERVER_HEARTBEAT_TTL_MS});
+});
+
+const serverHeartbeatSchema=z.object({serverId:z.string().min(2).max(64),status:z.enum(['ready','draining']).optional()});
+app.post('/v1/servers/heartbeat',async(req,reply)=>{
+  if(!requireMatchServer(req,reply))return;
+  const parsed=serverHeartbeatSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
+  if(!pool)return reply.code(503).send({error:'database-not-configured'});
+  const r=await pool.query(`update game_server_nodes set last_heartbeat_at=now(),status=coalesce($2,status),updated_at=now()
+    where server_id=$1 returning server_id,region,network_build,status,capacity,active_allocations,last_heartbeat_at`,[parsed.data.serverId,parsed.data.status??null]);
+  if(!r.rowCount)return reply.code(404).send({error:'server-node-not-registered'});
+  return reply.send(r.rows[0]);
+});
+
+const serverNodeSchema=z.object({serverId:z.string().min(2).max(64)});
+app.post('/v1/servers/drain',async(req,reply)=>{
+  if(!requireMatchServer(req,reply))return;
+  const parsed=serverNodeSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
+  if(!pool)return reply.code(503).send({error:'database-not-configured'});
+  const r=await pool.query(`update game_server_nodes set status='draining',updated_at=now() where server_id=$1
+    returning server_id,status,active_allocations,last_heartbeat_at`,[parsed.data.serverId]);
+  if(!r.rowCount)return reply.code(404).send({error:'server-node-not-registered'});
+  return reply.send(r.rows[0]);
+});
+
+const allocationReleaseSchema=z.object({allocationId:z.string().uuid(),matchId:z.string().uuid(),outcome:z.enum(['closed','failed']).default('closed')});
+app.post('/v1/servers/release-allocation',async(req,reply)=>{
+  if(!requireMatchServer(req,reply))return;
+  const parsed=allocationReleaseSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
+  if(!pool)return reply.code(503).send({error:'database-not-configured'});
+  const client=await pool.connect();
+  try{
+    await client.query('begin');
+    const released=await client.query(`update server_allocations set status=$3,ended_at=coalesce(ended_at,now())
+      where id=$1 and match_id=$2 and status not in ('closed','failed')
+      returning node_id,server_id,status`,[parsed.data.allocationId,parsed.data.matchId,parsed.data.outcome]);
+    if(!released.rowCount){await client.query('rollback');return reply.code(409).send({error:'allocation-already-released-or-missing'});}
+    const allocation=released.rows[0];
+    let activeAllocations:number|null=null;
+    if(allocation.node_id){
+      const node=await client.query(`update game_server_nodes set active_allocations=greatest(0,active_allocations-1),updated_at=now()
+        where id=$1 returning active_allocations`,[allocation.node_id]);
+      if(node.rowCount)activeAllocations=Number(node.rows[0].active_allocations);
+    }
+    await client.query('commit');
+    return reply.send({released:true,allocationId:parsed.data.allocationId,matchId:parsed.data.matchId,serverId:allocation.server_id,status:allocation.status,activeAllocations});
+  }catch(error){await client.query('rollback');throw error;}finally{client.release();}
+});
 
 const gameSessionSchema=z.object({userId:z.string().uuid(),region:z.string().min(2).max(16),build:z.string().min(2).max(32),deviceNonce:z.string().min(8).max(128)});
 app.post('/v1/auth/game-session',async(req,reply)=>{
@@ -119,14 +230,36 @@ app.post('/v1/matches/allocate',async(req,reply)=>{
   const session=requireCompatibleSession(req,reply);if(!session)return;
   const parsed=allocationSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(parsed.data.region!==session.region)return reply.code(409).send({error:'session-region-mismatch'});
-  const connectTarget=requireConnectTarget(reply);if(!connectTarget)return;
-  const allocationId=crypto.randomUUID(),matchId=crypto.randomUUID(),serverId=`${parsed.data.region.toUpperCase()}-${randomBytes(2).toString('hex').toUpperCase()}`;
+  const allocationId=crypto.randomUUID(),matchId=crypto.randomUUID();
   const connectToken=randomBytes(24).toString('base64url'),connectHash=sha256(connectToken),expiresAt=Date.now()+120_000;
   if(pool){
-    await pool.query(`insert into matches(id,mode,map_code,region,ranked,server_build) values($1,$2,$3,$4,$5,$6)`,[matchId,parsed.data.mode,parsed.data.map,parsed.data.region,parsed.data.ranked,session.build]);
-    await pool.query(`insert into server_allocations(id,match_id,server_id,region,status,user_id,connect_token_hash,connect_host,connect_port,expires_at) values($1,$2,$3,$4,'reserved',$5,$6,$7,$8,to_timestamp($9/1000.0))`,[allocationId,matchId,serverId,parsed.data.region,session.uid,connectHash,connectTarget.host,connectTarget.port,expiresAt]);
+    const client=await pool.connect();
+    try{
+      await client.query('begin');
+      await cleanupExpiredServerReservations(client);
+      const registered=await reserveRegisteredServer(client,parsed.data.region,session.build);
+      let connectTarget:ConnectTarget;
+      let serverId:string;
+      let nodeId:string|null=null;
+      let allocator:'registry'|'static-dev';
+      if(registered){
+        connectTarget={host:registered.host,port:registered.port};serverId=registered.serverId;nodeId=registered.nodeId;allocator='registry';
+      }else{
+        if(IS_PRODUCTION){await client.query('rollback');return reply.code(503).send({error:'no-healthy-game-server',region:parsed.data.region,networkBuild:session.build,heartbeatTtlMs:SERVER_HEARTBEAT_TTL_MS});}
+        const fallback=getStaticConnectTarget();
+        if(!fallback){await client.query('rollback');return reply.code(503).send({error:'game-server-connect-target-not-configured'});}
+        connectTarget=fallback;serverId=`${parsed.data.region.toUpperCase()}-DEV-${randomBytes(2).toString('hex').toUpperCase()}`;allocator='static-dev';
+      }
+      await client.query(`insert into matches(id,mode,map_code,region,ranked,server_build) values($1,$2,$3,$4,$5,$6)`,[matchId,parsed.data.mode,parsed.data.map,parsed.data.region,parsed.data.ranked,session.build]);
+      await client.query(`insert into server_allocations(id,match_id,server_id,region,status,user_id,connect_token_hash,connect_host,connect_port,expires_at,node_id)
+        values($1,$2,$3,$4,'reserved',$5,$6,$7,$8,to_timestamp($9/1000.0),$10)`,[allocationId,matchId,serverId,parsed.data.region,session.uid,connectHash,connectTarget.host,connectTarget.port,expiresAt,nodeId]);
+      await client.query('commit');
+      return reply.code(201).send({allocationId,matchId,serverId,region:parsed.data.region,tickRate:60,connectToken,connectHost:connectTarget.host,connectPort:connectTarget.port,expiresAt:new Date(expiresAt).toISOString(),networkBuild:session.build,backendProtocol:BACKEND_PROTOCOL_VERSION,allocator});
+    }catch(error){await client.query('rollback');throw error;}finally{client.release();}
   }
-  return reply.code(201).send({allocationId,matchId,serverId,region:parsed.data.region,tickRate:60,connectToken,connectHost:connectTarget.host,connectPort:connectTarget.port,expiresAt:new Date(expiresAt).toISOString(),networkBuild:session.build,backendProtocol:BACKEND_PROTOCOL_VERSION});
+  const connectTarget=requireConnectTarget(reply);if(!connectTarget)return;
+  const serverId=`${parsed.data.region.toUpperCase()}-DEV-${randomBytes(2).toString('hex').toUpperCase()}`;
+  return reply.code(201).send({allocationId,matchId,serverId,region:parsed.data.region,tickRate:60,connectToken,connectHost:connectTarget.host,connectPort:connectTarget.port,expiresAt:new Date(expiresAt).toISOString(),networkBuild:session.build,backendProtocol:BACKEND_PROTOCOL_VERSION,allocator:'static-dev'});
 });
 
 const admissionSchema=z.object({allocationId:z.string().uuid(),matchId:z.string().uuid(),connectToken:z.string().min(24).max(256)});

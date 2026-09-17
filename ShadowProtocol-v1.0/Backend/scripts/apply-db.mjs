@@ -12,9 +12,13 @@ if (!connectionString) {
 const plans = {
   init: [
     new URL('../db/schema.sql', import.meta.url),
-    new URL('../db/v101_connection_target.sql', import.meta.url)
+    new URL('../db/v101_connection_target.sql', import.meta.url),
+    new URL('../db/v101_server_registry.sql', import.meta.url)
   ],
-  v101: [new URL('../db/v101_connection_target.sql', import.meta.url)]
+  v101: [
+    new URL('../db/v101_connection_target.sql', import.meta.url),
+    new URL('../db/v101_server_registry.sql', import.meta.url)
+  ]
 };
 
 const files = plans[mode];
