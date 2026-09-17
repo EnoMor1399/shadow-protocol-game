@@ -26,10 +26,22 @@ Added `USPBuildInfoLibrary` to expose a single Blueprint/C++ source for:
 
 This is intentionally small and dependency-free so UMG, session creation and dedicated-server validation can consume the same build identity without duplicating literal strings.
 
-## Backend note
+## Backend protocol 0.8.0
 
-The Fastify backend package and current `/health` response remain on the existing `0.7.0` service/protocol generation. v1.0.1 does not silently rename that service version. The next networking pass should import the game build identity into authenticated session/allocation compatibility checks and then deliberately advance the backend protocol version.
+The Fastify backend now enforces the v1.0.1 network build at the authenticated session boundary and again during server allocation.
+
+- Backend package/protocol advances from `0.7.0` to `0.8.0`.
+- Required network build defaults to `SP-1.0.1`.
+- `ACCEPTED_NETWORK_BUILDS` can define an explicit server-side compatibility set for controlled rollout windows.
+- Unsupported clients receive HTTP `426` with `client-build-incompatible` plus the accepted build metadata.
+- Session tokens now bind the authenticated user to both `build` and backend `protocol`.
+- Match allocation re-validates the signed build/protocol before reserving a server.
+- Allocated matches persist `SP-1.0.1` as `server_build` instead of the old protocol-generation literal.
+- Reconnect ticket issuance and reconnect completion also enforce the signed compatibility state.
+- `/health`, `/v1/compatibility`, allocation responses and WebSocket hello messages expose the active release/network/protocol identity.
+
+This makes build compatibility server-owned rather than a presentation-only client string.
 
 ## Validation boundary
 
-The browser patch has been syntax-checked with Node. The Unreal files are source-level additions only in this environment; Unreal Header Tool, C++ compilation, PIE and packaged/dedicated-server testing still require a full Unreal Engine 5 environment.
+The browser patch has been syntax-checked with Node. The backend changes have been source-reviewed and the updated compatibility flow has been checked against the existing session/allocation structure; a full backend typecheck/runtime integration still requires dependencies and configured PostgreSQL/Redis services. The Unreal files are source-level additions only in this environment; Unreal Header Tool, C++ compilation, PIE and packaged/dedicated-server testing still require a full Unreal Engine 5 environment.
