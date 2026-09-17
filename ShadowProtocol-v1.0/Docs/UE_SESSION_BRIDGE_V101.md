@@ -236,3 +236,17 @@ The browser and backend paths are validated by GitHub Actions, including compati
 5. Implement the dedicated-server pre-login/admission layer that calls `/v1/matches/admit` before player spawn/possession.
 6. Integrate server register/heartbeat/drain/release calls into the real dedicated-server process and orchestration lifecycle; add per-node credentials after the shared-secret bootstrap model.
 7. Run 10-client dedicated-server compatibility, scheduler failover, admission, token-refresh, reconnect and round-transition tests.
+
+
+## Per-node server identity update
+
+The registry no longer uses one shared credential for all server authority. `SERVER_REGISTRATION_SECRET` bootstraps only `POST /v1/servers/register` (with `MATCH_SERVER_SECRET` retained only as a v1.0.1 migration fallback). Registration returns a fresh per-node credential while persisting only its SHA-256 hash.
+
+After registration, trusted server requests use:
+
+```text
+x-sp-server-id: <registered server id>
+x-sp-node-credential: <in-memory node credential>
+```
+
+Heartbeat, drain, one-time admission, allocation release and authoritative match writes require this node identity. Match-scoped calls are verified against the allocation's `node_id`, preventing one dedicated server from mutating another node's match. Shipped clients never receive either the registration bootstrap secret or node credentials.

@@ -52,7 +52,8 @@ void USPDedicatedServerBackendSubsystem::Deinitialize()
 {
     StopHeartbeat();
     SendBestEffortShutdownDrain();
-    MatchServerSecret.Empty();
+    RegistrationSecret.Empty();
+    NodeCredential.Empty();
     Super::Deinitialize();
 }
 
@@ -91,8 +92,13 @@ bool USPDedicatedServerBackendSubsystem::ConfigureFromRuntime()
         Capacity = FMath::Clamp(FCString::Atoi(*ParsedValue), 1, 128);
     }
 
-    MatchServerSecret = FPlatformMisc::GetEnvironmentVariable(TEXT("MATCH_SERVER_SECRET"));
-    MatchServerSecret.TrimStartAndEndInline();
+    RegistrationSecret = FPlatformMisc::GetEnvironmentVariable(TEXT("SERVER_REGISTRATION_SECRET"));
+    RegistrationSecret.TrimStartAndEndInline();
+    if (RegistrationSecret.IsEmpty())
+    {
+        RegistrationSecret = FPlatformMisc::GetEnvironmentVariable(TEXT("MATCH_SERVER_SECRET"));
+        RegistrationSecret.TrimStartAndEndInline();
+    }
 
     BackendBaseUrl = NormalizeBaseUrl(BackendBaseUrl);
     bConfigured = HasRequiredConfiguration();
@@ -101,7 +107,7 @@ bool USPDedicatedServerBackendSubsystem::ConfigureFromRuntime()
     {
         OnRequestFailed.Broadcast(
             TEXT("dedicated-server-config"),
-            TEXT("Dedicated-server backend configuration is incomplete. Required: SPBackendUrl, SPServerId, SPRegion, SPPublicHost, SPPublicPort and MATCH_SERVER_SECRET."));
+            TEXT("Dedicated-server backend configuration is incomplete. Required: SPBackendUrl, SPServerId, SPRegion, SPPublicHost, SPPublicPort and SERVER_REGISTRATION_SECRET."));
     }
 
     return bConfigured;
@@ -118,7 +124,7 @@ bool USPDedicatedServerBackendSubsystem::HasRequiredConfiguration() const
         && PublicPort <= 65535
         && Capacity > 0
         && Capacity <= 128
-        && !MatchServerSecret.IsEmpty();
+        && !RegistrationSecret.IsEmpty();
 }
 
 FString USPDedicatedServerBackendSubsystem::BuildUrl(const FString& Path) const
@@ -133,7 +139,15 @@ TSharedRef<IHttpRequest, ESPMode::ThreadSafe> USPDedicatedServerBackendSubsystem
     Request->SetVerb(Verb);
     Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
     Request->SetHeader(TEXT("Accept"), TEXT("application/json"));
-    Request->SetHeader(TEXT("x-match-server-secret"), MatchServerSecret);
+    if (Path.Equals(TEXT("/v1/servers/register"), ESearchCase::CaseSensitive))
+    {
+        Request->SetHeader(TEXT("x-match-server-secret"), RegistrationSecret);
+    }
+    else
+    {
+        Request->SetHeader(TEXT("x-sp-server-id"), ServerId);
+        Request->SetHeader(TEXT("x-sp-node-credential"), NodeCredential);
+    }
     return Request;
 }
 
@@ -183,6 +197,7 @@ void USPDedicatedServerBackendSubsystem::HandleRegistrationResponse(FHttpRequest
     JsonObject->TryGetStringField(TEXT("region"), Registration.Region);
     JsonObject->TryGetStringField(TEXT("network_build"), Registration.NetworkBuild);
     JsonObject->TryGetStringField(TEXT("status"), Registration.Status);
+    JsonObject->TryGetStringField(TEXT("nodeCredential"), NodeCredential);
 
     double CapacityValue = 0.0;
     double ActiveAllocationsValue = 0.0;
@@ -194,7 +209,7 @@ void USPDedicatedServerBackendSubsystem::HandleRegistrationResponse(FHttpRequest
     Registration.ActiveAllocations = FMath::RoundToInt(ActiveAllocationsValue);
     Registration.HeartbeatTtlMs = FMath::RoundToInt(HeartbeatTtlValue);
 
-    if (Registration.ServerId.IsEmpty() || Registration.NodeId.IsEmpty())
+    if (Registration.ServerId.IsEmpty() || Registration.NodeId.IsEmpty() || NodeCredential.IsEmpty())
     {
         OnRequestFailed.Broadcast(TEXT("server-register"), TEXT("Server-registration response is missing node identity."));
         return;
@@ -430,7 +445,7 @@ void USPDedicatedServerBackendSubsystem::HandleReleaseResponse(FHttpRequestPtr, 
 
 void USPDedicatedServerBackendSubsystem::SendBestEffortShutdownDrain()
 {
-    if (!bConfigured || !bRegistered || bDraining || MatchServerSecret.IsEmpty())
+    if (!bConfigured || !bRegistered || bDraining || NodeCredential.IsEmpty())
     {
         return;
     }

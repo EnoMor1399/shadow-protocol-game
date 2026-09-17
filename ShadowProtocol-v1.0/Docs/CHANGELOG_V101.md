@@ -135,3 +135,16 @@ The first TypeScript CI pass exposed two real issues in the backend (`ioredis` N
 Browser syntax and backend TypeScript/security/database/scheduler behavior are covered by GitHub Actions. The Unreal v1.0.1 files are source-level additions in this environment; Unreal Header Tool, UE C++ compilation, PIE, packaged-client testing and dedicated-server multiplayer testing still require a full Unreal Engine 5 environment.
 
 See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flow.
+
+
+## Per-node dedicated-server credentials
+
+- Adds `v101_node_credentials.sql` to the v1.0.1 migration chain.
+- `SERVER_REGISTRATION_SECRET` (with legacy `MATCH_SERVER_SECRET` fallback) now bootstraps only server registration.
+- Registration rotates a random per-node credential and persists only its SHA-256 hash, issue timestamp and revocation state.
+- Existing registry rows without credentials are marked `offline` and must re-register before scheduling.
+- Heartbeat, drain, one-time admission, allocation release and authoritative match writes require `x-sp-server-id` + `x-sp-node-credential`.
+- Match-scoped writes are checked against `server_allocations.node_id`, preventing cross-node mutation.
+- The no-database path fails authoritative server writes closed because node ownership cannot be proven.
+- PostgreSQL integration coverage includes bootstrap-only rejection, cross-node admission/telemetry/release rejection, credential hashing and owned-node success.
+- `USPDedicatedServerBackendSubsystem` stores the returned node credential only in dedicated-server memory and automatically uses it after registration.

@@ -168,3 +168,16 @@ The backend registry, capacity accounting, admission, reconnect and release beha
 ## Next hardening step
 
 The current backend still authenticates trusted server calls with one shared infrastructure credential. The next trust-boundary upgrade should rotate registration into **per-node credentials** so a registered server can act only as its own node and only on allocations assigned to that node.
+
+
+## Per-node credential hardening
+
+The dedicated-server trust boundary now separates registration bootstrap from node authority.
+
+- Set `SERVER_REGISTRATION_SECRET` only on trusted server/orchestrator infrastructure. The legacy `MATCH_SERVER_SECRET` name is accepted only as a v1.0.1 migration fallback.
+- `POST /v1/servers/register` is the only endpoint that accepts the shared bootstrap secret.
+- Every successful registration rotates and returns a random `nodeCredential`; the backend persists only its SHA-256 hash plus issue/revocation timestamps.
+- `USPDedicatedServerBackendSubsystem` keeps that node credential only in dedicated-server memory.
+- Heartbeat, drain, admission, allocation release and authoritative match writes send `x-sp-server-id` plus `x-sp-node-credential`.
+- Match-scoped calls are checked against `server_allocations.node_id`, so another registered node cannot admit, release or write telemetry for a match it does not own.
+- Existing registry rows without node credentials are marked `offline` by the migration and must re-register before scheduling.

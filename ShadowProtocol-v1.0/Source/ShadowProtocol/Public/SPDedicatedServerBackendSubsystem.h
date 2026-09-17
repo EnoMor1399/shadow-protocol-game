@@ -75,8 +75,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSPDedicatedServerBackendFailed, FS
 /**
  * Dedicated-server-only bridge for the v1.0.1 regional registry and admission API.
  *
- * The infrastructure credential is loaded from MATCH_SERVER_SECRET at runtime and
- * is never exposed to Blueprint, config files, logs, SaveGame data or the game client.
+ * The registration bootstrap credential is loaded from SERVER_REGISTRATION_SECRET at runtime.
+ * After registration, a per-node credential is kept only in server memory. Neither secret is
+ * exposed to Blueprint, config files, logs, SaveGame data or the game client.
  * Shipped clients may contain this class as code, but ConfigureFromRuntime refuses
  * to activate it outside a dedicated-server process.
  */
@@ -147,7 +148,8 @@ private:
     FString PublicHost;
     int32 PublicPort = 0;
     int32 Capacity = 10;
-    FString MatchServerSecret;
+    FString RegistrationSecret;
+    FString NodeCredential;
 
     bool bConfigured = false;
     bool bRegistered = false;

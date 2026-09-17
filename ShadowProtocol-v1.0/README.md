@@ -137,7 +137,13 @@ POST /v1/servers/register
 POST /v1/servers/heartbeat
 POST /v1/servers/drain
 POST /v1/servers/release-allocation
-x-match-server-secret: <infrastructure-only secret>
+
+Registration bootstrap:
+x-match-server-secret: <SERVER_REGISTRATION_SECRET>
+
+After registration:
+x-sp-server-id: <registered server id>
+x-sp-node-credential: <per-node credential>
 ```
 
 A registered node declares its stable `serverId`, region, network build, public host/port and allocation capacity. The allocator selects only nodes that:
@@ -228,3 +234,10 @@ The next production milestones are:
 8. add final first-person character/weapon animation and spatial audio;
 9. perform real dedicated-server 5v5 replication, token-refresh, admission, reconnect, scheduler-failover, round-transition and latency testing;
 10. expand from the hardened vertical slice toward Alpha content.
+
+
+### Per-node dedicated-server identity
+
+The shared server secret is now registration-bootstrap material only. Set `SERVER_REGISTRATION_SECRET` on trusted server/orchestrator infrastructure; `MATCH_SERVER_SECRET` remains a deprecated migration fallback for v1.0.1.
+
+Successful registration rotates a random per-node credential and persists only its SHA-256 hash. Heartbeat, drain, admission, release and authoritative match writes use `x-sp-server-id` plus `x-sp-node-credential`. Match-scoped operations are verified against `server_allocations.node_id`, so a credential for one node cannot operate on another node's allocation. The v1.0.1 migration chain now also applies `Backend/db/v101_node_credentials.sql`.
