@@ -19,7 +19,7 @@ The Unreal client must **never** contain `SESSION_BOOTSTRAP_SECRET` or `MATCH_SE
 
 `InstallAuthenticatedSession(...)` keeps those values in memory. The subsystem does not persist the Bearer token to config, SaveGame or logs.
 
-`MATCH_SERVER_SECRET` belongs only on trusted dedicated-server/backend infrastructure. Authoritative match telemetry and allocation-admission endpoints reject ordinary game clients that do not present that credential.
+`MATCH_SERVER_SECRET` belongs only on trusted dedicated-server/backend infrastructure. Authoritative match telemetry, server-registry lifecycle and allocation-admission endpoints reject ordinary game clients that do not present that credential.
 
 ## Client flow
 
@@ -36,14 +36,24 @@ The Unreal client must **never** contain `SESSION_BOOTSTRAP_SECRET` or `MATCH_SE
 
 ## Dedicated-server connection handoff
 
-v1.0.1 has an explicit connection-target contract between allocation and Unreal.
+v1.0.1 has an explicit connection-target contract between allocation and Unreal. With PostgreSQL in production, that target now comes from the regional healthy-server registry rather than a hard-coded address.
 
-Backend configuration:
+A dedicated server registers its infrastructure-owned identity and route using `POST /v1/servers/register`, then keeps the route eligible with `POST /v1/servers/heartbeat`. Registration includes:
+
+- stable `serverId`;
+- region;
+- network build;
+- public host and port;
+- concurrent allocation capacity.
+
+The allocator only selects a node when it matches the player's signed region/build, is `ready`, has a recent heartbeat and has free capacity. `SERVER_HEARTBEAT_TTL_MS` defaults to 30 seconds. Operators can remove a node from new allocations with `POST /v1/servers/drain` without invalidating allocations already assigned to it.
+
+For local development or the no-database prototype path, static routing remains available through:
 
 - `GAME_SERVER_PUBLIC_HOST`
 - `GAME_SERVER_PUBLIC_PORT`
 
-Development defaults to `127.0.0.1:7777`. Production intentionally has **no implicit localhost fallback**. If either production value is missing or the port is outside `1..65535`, `/v1/matches/allocate` returns `503 game-server-connect-target-not-configured`.
+Development defaults to `127.0.0.1:7777`. Production PostgreSQL allocation does **not** silently fall back to that address. If no eligible registered node exists, `/v1/matches/allocate` returns `503 no-healthy-game-server`.
 
 Allocation responses include:
 
@@ -57,9 +67,9 @@ Allocation responses include:
 
 `FSPMatchAllocation` exposes `ConnectHost` and `ConnectPort` to Blueprint. `USPBackendSessionSubsystem` verifies both values before broadcasting `OnAllocationCompleted`, preventing UMG/client-travel code from treating an address-less allocation as success.
 
-When PostgreSQL is enabled, the backend persists the owning user, target host/port, allocation status, expiry and **hash** of the connect token. The plaintext token remains only in the allocation response/client connection path.
+When PostgreSQL is enabled, the backend persists the owning user, selected node, target host/port, allocation status, expiry and **hash** of the connect token. The plaintext token remains only in the allocation response/client connection path.
 
-Existing databases apply the v1.0.1 migration through:
+Existing databases apply the complete v1.0.1 migration chain through:
 
 ```bash
 npm run db:upgrade:v101
@@ -71,7 +81,20 @@ Fresh databases use:
 npm run db:init
 ```
 
-This static host/port configuration is the v1.0.1 handoff contract, not the final regional scheduler. A later allocator should replace it with a healthy-server registry that selects a ready endpoint by region/build/capacity.
+The migration chain includes both `v101_connection_target.sql` and `v101_server_registry.sql`.
+
+## Server registry lifecycle
+
+The infrastructure lifecycle is:
+
+1. Dedicated-server process starts with the infrastructure-only `MATCH_SERVER_SECRET`.
+2. It calls `POST /v1/servers/register` with its id, region, build, public endpoint and capacity.
+3. It calls `POST /v1/servers/heartbeat` frequently enough to stay inside the scheduler heartbeat TTL.
+4. When planned maintenance begins, it calls `POST /v1/servers/drain`; new allocations stop immediately while existing allocations can complete.
+5. On match/allocation completion or failure, it calls `POST /v1/servers/release-allocation` so scheduler capacity is returned.
+6. Expired reservations that never reach admission are reclaimed automatically during later allocation requests.
+
+The current v1.0.1 registry uses the shared `MATCH_SERVER_SECRET` as the infrastructure trust credential. Per-node credentials/orchestrator identity are a later hardening step and must not be inferred as already implemented.
 
 ## One-time connection admission
 
@@ -87,7 +110,7 @@ Recommended connection sequence:
    - the presented `connectToken`;
    - infrastructure header `x-match-server-secret`.
 4. The backend hashes the presented token and atomically verifies allocation id, match id, token hash, expiry, valid pre-live status and that the token has never been consumed.
-5. On success, the backend returns the allocated `userId`, server id, region, network build and backend protocol, changes the allocation to `live`, and records `connect_token_consumed_at`.
+5. On success, the backend returns the allocated `userId`, selected server id, region, network build and backend protocol, changes the allocation to `live`, and records `connect_token_consumed_at`.
 6. The dedicated server admits/spawns/possesses the player only after that success response.
 7. A wrong, expired or replayed token receives `403 admission-denied` and must not create a player session.
 
@@ -141,7 +164,7 @@ Bind the ready-room or online-session controller to:
 
 Recommended UMG sequence:
 
-**Ready Room → Compatibility → Identity Session → Allocate → Validated Host/Port → Connect → Server Redeems Admission Token → Admit Player → Refresh Session as Needed → Live Match**
+**Ready Room → Compatibility → Identity Session → Allocate → Registry-selected Host/Port → Connect → Server Redeems Admission Token → Admit Player → Refresh Session as Needed → Live Match**
 
 Recovery sequence:
 
@@ -159,6 +182,7 @@ The allocated/reconnected server build is then validated with `USPBuildInfoLibra
 
 The following operations are guarded by `x-match-server-secret` and must not be authored by public clients:
 
+- server registration, heartbeat, drain and allocation release;
 - one-time allocation-token admission;
 - anti-cheat events;
 - generic match telemetry;
@@ -176,13 +200,13 @@ This credential is infrastructure-only. It must be injected into trusted server 
 
 ## Database validation
 
-The backend now has repeatable database commands:
+The backend has repeatable database commands:
 
-- `npm run db:init` — base schema plus v1.0.1 migration;
-- `npm run db:upgrade:v101` — v1.0.1 allocation/admission migration only;
-- `npm run test:postgres` — persistent allocation/admission/ready/reconnect integration test.
+- `npm run db:init` — base schema plus all v1.0.1 migrations;
+- `npm run db:upgrade:v101` — idempotent v1.0.1 connection/admission + registry migrations;
+- `npm run test:postgres` — persistent scheduler/allocation/admission/ready/reconnect/release integration test.
 
-GitHub Actions runs the PostgreSQL test against a disposable PostgreSQL 16 service. It verifies hashed allocation-token persistence, one-time admission and replay rejection, database-owned ready state, reconnect token hashing/deadline behavior and successful slot restoration.
+GitHub Actions runs the PostgreSQL test against a disposable PostgreSQL 16 service. It verifies server registration authorization, draining/stale-node exclusion, capacity enforcement, selected-node persistence, hashed allocation-token persistence, one-time admission and replay rejection, database-owned ready state, reconnect token hashing/deadline behavior, successful slot restoration and allocation release/capacity recovery.
 
 ## Unreal modules
 
@@ -201,7 +225,7 @@ Primary files:
 
 ## Validation boundary
 
-The browser and backend paths are validated by GitHub Actions, including compatibility/session/allocation, connection-target metadata, production fail-closed routing, session refresh, authenticated matchmaking identity, dedicated-server telemetry authorization, real PostgreSQL schema initialization, one-time admission and reserved-slot recovery. The Unreal bridge has been source-reviewed only in the current environment. It still requires Unreal Header Tool, UE C++ compilation, PIE and packaged-client testing before it can be treated as production-compiled code.
+The browser and backend paths are validated by GitHub Actions, including compatibility/session/allocation, production regional scheduling, heartbeat/capacity enforcement, connection-target metadata, session refresh, authenticated matchmaking identity, dedicated-server telemetry authorization, real PostgreSQL schema initialization, one-time admission and reserved-slot recovery. The Unreal bridge has been source-reviewed only in the current environment. It still requires Unreal Header Tool, UE C++ compilation, PIE and packaged-client testing before it can be treated as production-compiled code.
 
 ## Next integration tasks
 
@@ -210,5 +234,5 @@ The browser and backend paths are validated by GitHub Actions, including compati
 3. Implement the trusted platform/account bootstrap that supplies the signed game session.
 4. Implement actual client travel / OnlineSubsystem connection using the returned host, port and short-lived connect token.
 5. Implement the dedicated-server pre-login/admission layer that calls `/v1/matches/admit` before player spawn/possession.
-6. Replace the static v1.0.1 connection target with a regional healthy-server registry/scheduler.
-7. Run 10-client dedicated-server compatibility, admission, token-refresh, reconnect and round-transition tests.
+6. Integrate server register/heartbeat/drain/release calls into the real dedicated-server process and orchestration lifecycle; add per-node credentials after the shared-secret bootstrap model.
+7. Run 10-client dedicated-server compatibility, scheduler failover, admission, token-refresh, reconnect and round-transition tests.

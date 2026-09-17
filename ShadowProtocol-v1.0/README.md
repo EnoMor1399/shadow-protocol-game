@@ -118,7 +118,7 @@ For local PostgreSQL + Redis, start the services before `db:init`:
 docker compose up -d
 ```
 
-`npm run db:init` applies the base schema and the v1.0.1 connection/admission migration in order. To upgrade an existing v1.0 database without reapplying the full base schema:
+`npm run db:init` applies the base schema plus the v1.0.1 connection/admission and server-registry migrations in order. To upgrade an existing v1.0 database without reapplying the full base schema:
 
 ```bash
 npm run db:upgrade:v101
@@ -128,27 +128,49 @@ Replace every development secret before any production deployment.
 
 The backend protocol is **`0.8.0`** and server-owned compatibility enforcement is active. The default accepted network build is **`SP-1.0.1`**. Authenticated session creation rejects unsupported builds with HTTP `426`, signed sessions carry build/protocol identity, and match allocation validates both values again before reserving a server. `ACCEPTED_NETWORK_BUILDS` may be used for an explicit controlled rollout policy.
 
-### Dedicated-server connection and admission
+### Regional dedicated-server registry and allocation
 
-Allocation returns a client-connectable target. Configure:
+PostgreSQL-backed production allocation now uses a health-aware regional server registry instead of a static address. Trusted dedicated servers register themselves through:
+
+```text
+POST /v1/servers/register
+POST /v1/servers/heartbeat
+POST /v1/servers/drain
+POST /v1/servers/release-allocation
+x-match-server-secret: <infrastructure-only secret>
+```
+
+A registered node declares its stable `serverId`, region, network build, public host/port and allocation capacity. The allocator selects only nodes that:
+
+- are in the authenticated session region;
+- advertise the same network build;
+- are in `ready` state rather than `draining`/`offline`;
+- have a heartbeat newer than `SERVER_HEARTBEAT_TTL_MS` (30 seconds by default);
+- still have allocation capacity.
+
+Capacity reservation is updated atomically in PostgreSQL. Expired pre-admission reservations are reclaimed, and the trusted release endpoint decrements node load when an allocation closes or fails. Production returns `503 no-healthy-game-server` when no eligible node exists instead of silently routing to a stale or incompatible server.
+
+For local development only, the legacy static target remains as a fallback:
 
 ```bash
-GAME_SERVER_PUBLIC_HOST=your-public-game-server-host
+GAME_SERVER_PUBLIC_HOST=127.0.0.1
 GAME_SERVER_PUBLIC_PORT=7777
 ```
 
-Development falls back to `127.0.0.1:7777`. **Production does not.** A production allocation without a valid public host/port fails with `503 game-server-connect-target-not-configured` rather than returning unusable connection data.
+When PostgreSQL is not configured, allocation continues to use that static development target. With PostgreSQL in production, healthy registered nodes are required.
 
-When PostgreSQL is enabled, each allocation persists its user, server id, target host/port, expiry and a **hash** of the short-lived connect token. The plaintext connect token is returned only to the client connection layer.
+Each persistent allocation stores its owning user, selected node/server id, target host/port, expiry and a **hash** of the short-lived connect token. The plaintext connect token is returned only to the client connection layer.
 
-Before accepting the connection, the trusted dedicated server must redeem that presented token through:
+### Dedicated-server connection admission
+
+Before accepting the connection, the trusted dedicated server must redeem the presented token through:
 
 ```text
 POST /v1/matches/admit
 x-match-server-secret: <infrastructure-only secret>
 ```
 
-The admission request supplies `allocationId`, `matchId` and the presented `connectToken`. The backend verifies the token hash, allocation/match identity, expiry and unconsumed state atomically. A successful redemption binds the connection to the allocated `userId`, marks the allocation `live`, records `connect_token_consumed_at`, and returns the server/network identity. The same token cannot be replayed; a second redemption is rejected with `403 admission-denied`.
+The admission request supplies `allocationId`, `matchId` and the presented `connectToken`. The backend verifies the token hash, allocation/match identity, expiry and unconsumed state atomically. A successful redemption binds the connection to the allocated `userId`, marks the allocation `live`, records `connect_token_consumed_at`, and returns the selected server/network identity. The same token cannot be replayed; a second redemption is rejected with `403 admission-denied`.
 
 The game client must never contain `MATCH_SERVER_SECRET`. That credential belongs only to backend/dedicated-server infrastructure.
 
@@ -172,7 +194,7 @@ npm run db:init
 npm run test:postgres
 ```
 
-GitHub Actions runs all of the above against a disposable PostgreSQL 16 service. The suite validates build compatibility, session issuance/rotation, production routing failure, authenticated matchmaking, server-only telemetry, allocation persistence, hashed connect tokens, one-time dedicated-server admission/replay rejection, database-owned ready-state, and reserved-slot reconnect recovery.
+GitHub Actions runs all of the above against a disposable PostgreSQL 16 service. The suite validates build compatibility, session issuance/rotation, development/static routing behavior, authenticated matchmaking, server-only telemetry, regional node registration, draining/stale-node exclusion, capacity enforcement, allocation persistence, hashed connect tokens, one-time dedicated-server admission/replay rejection, database-owned ready-state, reserved-slot reconnect recovery and trusted allocation release.
 
 ## Documentation
 
@@ -201,8 +223,8 @@ The next production milestones are:
 3. implement the trusted platform/account bootstrap that supplies signed game sessions to Unreal;
 4. wire `ConnectHost`, `ConnectPort` and the short-lived connect token into OnlineSubsystem/client travel;
 5. have the dedicated-server connection handler redeem `/v1/matches/admit` before spawning/possessing the player;
-6. replace the static connection target with a regional healthy-server registry/scheduler;
+6. integrate the regional server registry with the real dedicated-server process/orchestrator and replace the shared infrastructure credential with per-node identity;
 7. author the production Embassy map and objective sites;
 8. add final first-person character/weapon animation and spatial audio;
-9. perform real dedicated-server 5v5 replication, token-refresh, admission, reconnect, round-transition and latency testing;
+9. perform real dedicated-server 5v5 replication, token-refresh, admission, reconnect, scheduler-failover, round-transition and latency testing;
 10. expand from the hardened vertical slice toward Alpha content.

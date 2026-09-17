@@ -50,38 +50,43 @@ The Fastify backend now enforces v1.0.1 build identity and explicit trust bounda
 - Session tokens bind the authenticated user to `build`, region and backend `protocol`.
 - `/v1/auth/refresh` rotates a still-valid compatible session and extends PostgreSQL/Redis expiry when configured.
 - Match allocation re-validates the signed build/protocol before reserving a server and persists the session network build as `server_build`.
-- Allocation returns `connectHost`, `connectPort` and a short-lived connect token; configured targets are persisted with `server_allocations` when PostgreSQL is enabled.
-- Development may use `127.0.0.1:7777`; production has no localhost fallback and returns `503 game-server-connect-target-not-configured` when routing configuration is absent or invalid.
+- Allocation returns `connectHost`, `connectPort` and a short-lived connect token, with the selected target persisted in `server_allocations` when PostgreSQL is enabled.
 - `Backend/scripts/apply-db.mjs` provides repeatable `db:init` and `db:upgrade:v101` database paths.
-- `Backend/db/v101_connection_target.sql` adds allocation user ownership, connection target columns and token-consumption state for existing databases.
+- `Backend/db/v101_connection_target.sql` adds allocation user ownership, connection target columns and token-consumption state.
+- `Backend/db/v101_server_registry.sql` adds regional server nodes, heartbeat/capacity state and allocation-to-node linkage.
+- Trusted servers can register, heartbeat, drain and release allocations through `/v1/servers/*` endpoints guarded by `MATCH_SERVER_SECRET`.
+- Production PostgreSQL allocation selects only same-region/same-build nodes that are `ready`, fresh within `SERVER_HEARTBEAT_TTL_MS` and below capacity.
+- Stale or draining nodes are ignored; a region with no eligible node returns `503 no-healthy-game-server`.
+- Development retains the static `GAME_SERVER_PUBLIC_HOST` / `GAME_SERVER_PUBLIC_PORT` fallback; production PostgreSQL allocation does not silently fall back to it.
+- Capacity is reserved atomically, expired pre-admission reservations are reclaimed, and trusted allocation release decrements node load.
 - Allocation tokens are stored only as hashes and are bound to the authenticated session user.
 - Trusted dedicated servers redeem `POST /v1/matches/admit` with `MATCH_SERVER_SECRET`, allocation id, match id and the presented connect token before admitting a player.
 - Admission atomically verifies allocation identity, token hash, expiry, status and unused state; success marks the allocation `live` and records `connect_token_consumed_at`.
 - Replaying a consumed connect token is rejected with `403 admission-denied`.
 - Matchmaking requires the signed compatible session; the client no longer controls authoritative `userId`, skill rating or trust score.
 - Matchmaking region must match the signed session region; skill/trust are read from server-owned database state when PostgreSQL is configured.
-- `MATCH_SERVER_SECRET` gates admission plus anti-cheat, match telemetry, round results, tactical equipment, player slots, fortification, ballistic, kill-feed, overtime, environment/combat and tactical-interaction writes.
+- `MATCH_SERVER_SECRET` gates server registry lifecycle, admission plus anti-cheat, match telemetry, round results, tactical equipment, player slots, fortification, ballistic, kill-feed, overtime, environment/combat and tactical-interaction writes.
 - Reconnect ticket issuance and reconnect completion enforce signed compatibility and database-backed slot ownership.
 - Ready-state and reconnect mutations fail closed when PostgreSQL is unavailable because ownership cannot be proven safely.
-- `/health`, `/v1/compatibility`, allocation/reconnect responses and WebSocket hello messages expose the active release/network/protocol identity.
+- `/health`, `/v1/compatibility`, allocation/reconnect responses and WebSocket hello messages expose the active release/network/protocol identity; `/health` also exposes scheduler heartbeat policy.
 
-This makes compatibility, matchmaking identity, connection routing, connection admission and authoritative event ownership server-controlled rather than client-asserted.
+This makes compatibility, matchmaking identity, regional connection routing, connection admission and authoritative event ownership server-controlled rather than client-asserted.
 
 ## PostgreSQL migration and initialization
 
-Fresh databases can now be initialized with:
+Fresh databases can be initialized with:
 
 ```bash
 npm run db:init
 ```
 
-Existing v1.0 databases can apply only the v1.0.1 allocation/admission migration with:
+Existing v1.0 databases can apply the complete v1.0.1 migration chain with:
 
 ```bash
 npm run db:upgrade:v101
 ```
 
-The migration adds the client connection target, owning user, one-time token consumption timestamp, port validation and allocation lookup index without requiring destructive schema recreation.
+The upgrade applies `v101_connection_target.sql` and `v101_server_registry.sql` idempotently. Together they add the client connection target, owning user, one-time token consumption timestamp, port validation, regional server registry, heartbeat/capacity state and allocation-node relationship without destructive schema recreation.
 
 ## CI and integration validation
 
@@ -97,30 +102,36 @@ The no-database suite verifies:
 - signed `SP-1.0.1` session creation;
 - authenticated session refresh/rotation;
 - Embassy / Protocol server allocation with `connectHost` / `connectPort`;
-- production allocation fails closed when public server routing is not configured;
+- production allocation fails closed when no static route exists in the no-database compatibility path;
 - authenticated matchmaking identity ignores spoofed client identity/rating/trust fields;
 - rejection of public-client authoritative match telemetry;
 - acceptance of the same telemetry with the dedicated-server credential;
 - fail-closed reconnect/ready-state ownership behavior when PostgreSQL is unavailable.
 
 The PostgreSQL integration job verifies:
-- base schema plus v1.0.1 migration initialization;
-- allocation host/port and hashed connect-token persistence;
-- allocation ownership bound to the authenticated user;
-- public admission attempts rejected;
-- incorrect connect tokens rejected;
+- base schema plus both v1.0.1 migrations;
+- public server-registration attempts are rejected;
+- trusted regional node registration;
+- draining nodes are excluded from scheduling;
+- stale-heartbeat nodes are excluded from scheduling;
+- capacity saturation returns `503 no-healthy-game-server` rather than overbooking;
+- selected node id/host/port and hashed connect token are persisted;
+- allocation ownership is bound to the authenticated user;
+- public admission attempts are rejected;
+- incorrect connect tokens are rejected;
 - valid dedicated-server admission succeeds once;
 - replay of the same connect token is rejected;
 - admitted allocation transitions to `live` with consumption timestamp;
 - authenticated ready-state ownership;
 - hashed 90-second reconnect ticket storage;
 - invalid reconnect rejection and valid reconnect recovery;
-- reconnect token/deadline cleanup after restoration.
+- reconnect token/deadline cleanup after restoration;
+- trusted allocation release returns node capacity to the scheduler.
 
 The first TypeScript CI pass exposed two real issues in the backend (`ioredis` NodeNext constructor import and an implicit-any WebSocket message parameter); both were corrected without weakening strict TypeScript settings.
 
 ## Validation boundary
 
-Browser syntax and backend TypeScript/security/database behavior are covered by GitHub Actions. The Unreal v1.0.1 files are source-level additions in this environment; Unreal Header Tool, UE C++ compilation, PIE, packaged-client testing and dedicated-server multiplayer testing still require a full Unreal Engine 5 environment.
+Browser syntax and backend TypeScript/security/database/scheduler behavior are covered by GitHub Actions. The Unreal v1.0.1 files are source-level additions in this environment; Unreal Header Tool, UE C++ compilation, PIE, packaged-client testing and dedicated-server multiplayer testing still require a full Unreal Engine 5 environment.
 
 See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flow.
