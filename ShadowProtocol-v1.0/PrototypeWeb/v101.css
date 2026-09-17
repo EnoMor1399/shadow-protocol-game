@@ -1,0 +1,16 @@
+/* Shadow Protocol v1.0.1 stability/presentation patch */
+.patchStatus{border:1px solid rgba(122,164,133,.34);background:rgba(33,73,46,.22);color:#a5cbb0;padding:.3rem .55rem;font-size:.62rem;letter-spacing:.13em;font-weight:700;white-space:nowrap}
+.patchStatus.warning{border-color:rgba(184,75,75,.55);background:rgba(93,24,24,.28);color:#efaaaa}
+.versionCard span{display:block;margin-top:.42rem;color:rgba(229,235,239,.55);font-size:.63rem;letter-spacing:.11em}
+.clientDiagnostic{margin-top:1rem;padding:.85rem;border:1px solid rgba(255,255,255,.09);background:rgba(0,0,0,.18)}
+.clientDiagnostic small,.clientDiagnostic b,.clientDiagnostic span{display:block}.clientDiagnostic small{color:rgba(229,235,239,.5);font-size:.62rem;letter-spacing:.14em}.clientDiagnostic b{margin:.35rem 0;color:#d5dde1;font-size:.84rem}.clientDiagnostic span{color:rgba(229,235,239,.5);font-size:.68rem;line-height:1.45}.clientDiagnostic.ok{border-color:rgba(122,164,133,.24)}.clientDiagnostic.ok b{color:#9bc1a5}.clientDiagnostic.bad{border-color:rgba(187,74,74,.42)}.clientDiagnostic.bad b{color:#e49a9a}
+.buildIntegrityState.degraded{border-color:rgba(187,74,74,.45)!important}.buildIntegrityState.degraded b{color:#e49a9a!important}
+.sessionIntegrity{position:absolute;right:1.35rem;bottom:4.45rem;z-index:31;display:flex;align-items:center;gap:.5rem;padding:.42rem .62rem;border:1px solid rgba(122,164,133,.27);background:rgba(6,11,9,.72);backdrop-filter:blur(8px);color:#a8c9b0;font-size:.61rem;letter-spacing:.11em;font-weight:700;pointer-events:none;transition:opacity .18s ease,border-color .18s ease,color .18s ease}
+.sessionIntegrity i{width:.42rem;height:.42rem;border-radius:50%;background:#83b18e;box-shadow:0 0 0 .18rem rgba(131,177,142,.1)}
+.sessionIntegrity.warning{border-color:rgba(198,152,69,.42);color:#d5b66e}.sessionIntegrity.warning i{background:#d3a64b}.sessionIntegrity.fault{border-color:rgba(190,74,74,.5);color:#e29a9a}.sessionIntegrity.fault i{background:#c45050}
+.v101-no-hints .quickKeys{display:none!important}.v101-no-intel-notices #siteRibbon{display:none!important}
+.settingsGrid{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media(max-width:1150px){.settingsGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.sessionIntegrity{right:.8rem;bottom:4rem}}
+@media(max-width:760px){.settingsGrid{grid-template-columns:1fr}.patchStatus{display:none}.sessionIntegrity{left:.65rem;right:auto;bottom:3.7rem;max-width:calc(100vw - 1.3rem)}}
+.v10-reduced-motion .sessionIntegrity,.v10-reduced-motion .patchStatus{transition:none!important}
+.hud-minimal .sessionIntegrity{opacity:.64}
