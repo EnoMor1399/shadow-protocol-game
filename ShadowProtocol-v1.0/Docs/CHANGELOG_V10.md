@@ -4,6 +4,7 @@
 - Added v1.0 classified-command interface layer.
 - Added settings/keybind screen.
 - Added persistent HUD density, contrast, reduced-motion, and telemetry preferences.
+- Added functional enhanced-contrast and reduced-motion presentation modes.
 - Added F1 HUD-density shortcut and Escape settings access.
 - Added objective-site confirmation ribbon.
 - Added contextual cover/peek indicator.
@@ -16,7 +17,9 @@
 - `ASPCharacter` now creates the cover component and performs an authority-side cover probe when lean state changes.
 
 ## Objective presentation
-- Added replicated `ASPObjectiveSiteActor` with server-owned active-site state and authorable site/zone identity.
+- Enhanced the existing authoritative `ASPObjectiveSite` rather than introducing a second site class.
+- Added replicated site identity, display name, Embassy zone, active-site notification, and Blueprint presentation event.
+- Existing `ASPProtocolGameMode::SelectObjectiveSiteForRound()` remains responsible for authoritative site rotation.
 
 ## Deployment
 - Added replicated `ASPDeploymentDirector` for Authentication → Loadout Check → Insertion → Live sequencing.
