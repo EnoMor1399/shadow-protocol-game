@@ -3,7 +3,27 @@
   "version": "0.8.0",
   "private": true,
   "type": "module",
-  "scripts": {"dev":"tsx watch src/server.ts","start":"tsx src/server.ts","typecheck":"tsc --noEmit","test:compatibility":"node --test test/*.mjs"},
-  "dependencies": {"@fastify/cors":"^10.0.0","@fastify/websocket":"^11.0.0","fastify":"^5.0.0","ioredis":"^5.4.0","pg":"^8.13.0","zod":"^3.23.0"},
-  "devDependencies": {"@types/node":"^22.0.0","@types/pg":"^8.11.0","tsx":"^4.19.0","typescript":"^5.7.0"}
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "db:init": "node scripts/apply-db.mjs init",
+    "db:upgrade:v101": "node scripts/apply-db.mjs v101",
+    "test:compatibility": "node --test test/compatibility.mjs test/production-target.mjs",
+    "test:postgres": "node --test test/postgres-integration.mjs"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.0",
+    "@fastify/websocket": "^11.0.0",
+    "fastify": "^5.0.0",
+    "ioredis": "^5.4.0",
+    "pg": "^8.13.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
 }
