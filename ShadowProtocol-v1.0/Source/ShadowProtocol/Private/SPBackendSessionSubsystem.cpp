@@ -178,6 +178,89 @@ void USPBackendSessionSubsystem::InstallAuthenticatedSession(const FString& InSe
     SessionExpiresAt = InExpiresAt;
 }
 
+void USPBackendSessionSubsystem::RefreshAuthenticatedSession()
+{
+    if (!CanUseAuthenticatedMatchEndpoint(TEXT("session-refresh")))
+    {
+        return;
+    }
+
+    const TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = CreateAuthenticatedJsonRequest(TEXT("/v1/auth/refresh"), TEXT("POST"));
+    Request->SetContentAsString(TEXT("{}"));
+    Request->OnProcessRequestComplete().BindUObject(this, &USPBackendSessionSubsystem::HandleSessionRefreshResponse);
+
+    if (!Request->ProcessRequest())
+    {
+        OnRequestFailed.Broadcast(TEXT("session-refresh"), TEXT("Unable to start game-session refresh request."));
+    }
+}
+
+void USPBackendSessionSubsystem::HandleSessionRefreshResponse(FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
+{
+    if (!bWasSuccessful || !Response.IsValid())
+    {
+        BroadcastHttpFailure(TEXT("session-refresh"), Response, bWasSuccessful);
+        return;
+    }
+
+    TSharedPtr<FJsonObject> JsonObject;
+    const bool bParsedJson = ParseJsonObject(Response->GetContentAsString(), JsonObject);
+    const int32 StatusCode = Response->GetResponseCode();
+
+    if (StatusCode == 426)
+    {
+        HandleUpgradeResponse(JsonObject, TEXT("Backend rejected session refresh because the client build is no longer compatible."));
+        return;
+    }
+
+    if (StatusCode == 401 || StatusCode == 403)
+    {
+        ClearAuthenticatedSession();
+        BroadcastHttpFailure(TEXT("session-refresh"), Response, bWasSuccessful);
+        return;
+    }
+
+    if (StatusCode < 200 || StatusCode >= 300)
+    {
+        BroadcastHttpFailure(TEXT("session-refresh"), Response, bWasSuccessful);
+        return;
+    }
+
+    if (!bParsedJson || !JsonObject.IsValid())
+    {
+        OnRequestFailed.Broadcast(TEXT("session-refresh"), TEXT("Backend returned invalid session refresh JSON."));
+        return;
+    }
+
+    FString RefreshedSessionId;
+    FString RefreshedToken;
+    FString RefreshedRegion;
+    FString RefreshedExpiresAt;
+    JsonObject->TryGetStringField(TEXT("sessionId"), RefreshedSessionId);
+    JsonObject->TryGetStringField(TEXT("sessionToken"), RefreshedToken);
+    JsonObject->TryGetStringField(TEXT("region"), RefreshedRegion);
+    JsonObject->TryGetStringField(TEXT("expiresAt"), RefreshedExpiresAt);
+
+    if (RefreshedSessionId.IsEmpty() || RefreshedToken.IsEmpty() || RefreshedExpiresAt.IsEmpty())
+    {
+        OnRequestFailed.Broadcast(TEXT("session-refresh"), TEXT("Session refresh response is missing required token data."));
+        return;
+    }
+
+    if (!SessionId.IsEmpty() && !RefreshedSessionId.Equals(SessionId, ESearchCase::CaseSensitive))
+    {
+        ClearAuthenticatedSession();
+        OnRequestFailed.Broadcast(TEXT("session-refresh"), TEXT("Backend returned a different session identity during token rotation."));
+        return;
+    }
+
+    SessionId = RefreshedSessionId;
+    SessionToken = RefreshedToken;
+    SessionRegion = RefreshedRegion.IsEmpty() ? SessionRegion : RefreshedRegion;
+    SessionExpiresAt = RefreshedExpiresAt;
+    OnSessionRefreshed.Broadcast(SessionId, SessionExpiresAt);
+}
+
 void USPBackendSessionSubsystem::ClearAuthenticatedSession()
 {
     SessionId.Reset();
