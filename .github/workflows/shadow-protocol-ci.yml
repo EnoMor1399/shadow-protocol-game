@@ -1,0 +1,42 @@
+name: Shadow Protocol CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, 'upgrade/**']
+
+permissions:
+  contents: read
+
+jobs:
+  browser-syntax:
+    name: Browser syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check gameplay JavaScript
+        run: node --check ShadowProtocol-v1.0/PrototypeWeb/game.js
+      - name: Check v1.0.1 UX JavaScript
+        run: node --check ShadowProtocol-v1.0/PrototypeWeb/v1.js
+
+  backend-typecheck:
+    name: Backend TypeScript
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ShadowProtocol-v1.0/Backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ShadowProtocol-v1.0/Backend/package.json
+      - name: Install backend dependencies
+        run: npm install --no-audit --no-fund
+      - name: Typecheck backend
+        run: npm run typecheck
