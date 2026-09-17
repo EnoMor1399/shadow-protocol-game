@@ -124,9 +124,26 @@ app.post('/v1/matches/allocate',async(req,reply)=>{
   const connectToken=randomBytes(24).toString('base64url'),connectHash=sha256(connectToken),expiresAt=Date.now()+120_000;
   if(pool){
     await pool.query(`insert into matches(id,mode,map_code,region,ranked,server_build) values($1,$2,$3,$4,$5,$6)`,[matchId,parsed.data.mode,parsed.data.map,parsed.data.region,parsed.data.ranked,session.build]);
-    await pool.query(`insert into server_allocations(id,match_id,server_id,region,status,connect_token_hash,connect_host,connect_port,expires_at) values($1,$2,$3,$4,'reserved',$5,$6,$7,to_timestamp($8/1000.0))`,[allocationId,matchId,serverId,parsed.data.region,connectHash,connectTarget.host,connectTarget.port,expiresAt]);
+    await pool.query(`insert into server_allocations(id,match_id,server_id,region,status,user_id,connect_token_hash,connect_host,connect_port,expires_at) values($1,$2,$3,$4,'reserved',$5,$6,$7,$8,to_timestamp($9/1000.0))`,[allocationId,matchId,serverId,parsed.data.region,session.uid,connectHash,connectTarget.host,connectTarget.port,expiresAt]);
   }
   return reply.code(201).send({allocationId,matchId,serverId,region:parsed.data.region,tickRate:60,connectToken,connectHost:connectTarget.host,connectPort:connectTarget.port,expiresAt:new Date(expiresAt).toISOString(),networkBuild:session.build,backendProtocol:BACKEND_PROTOCOL_VERSION});
+});
+
+const admissionSchema=z.object({allocationId:z.string().uuid(),matchId:z.string().uuid(),connectToken:z.string().min(24).max(256)});
+app.post('/v1/matches/admit',async(req,reply)=>{
+  if(!requireMatchServer(req,reply))return;
+  const parsed=admissionSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
+  if(!pool)return reply.code(503).send({error:'database-not-configured'});
+  const tokenHash=sha256(parsed.data.connectToken);
+  const r=await pool.query(`update server_allocations sa
+    set status='live',started_at=coalesce(sa.started_at,now()),connect_token_consumed_at=now()
+    from matches m
+    where sa.id=$1 and sa.match_id=$2 and m.id=sa.match_id and sa.connect_token_hash=$3
+      and sa.connect_token_consumed_at is null and sa.expires_at>now() and sa.status in ('reserved','starting','ready')
+    returning sa.id as allocation_id,sa.match_id,sa.server_id,sa.region,sa.user_id,m.server_build`,[parsed.data.allocationId,parsed.data.matchId,tokenHash]);
+  if(!r.rowCount)return reply.code(403).send({error:'admission-denied'});
+  const admitted=r.rows[0];
+  return reply.send({admitted:true,allocationId:admitted.allocation_id,matchId:admitted.match_id,serverId:admitted.server_id,region:admitted.region,userId:admitted.user_id,networkBuild:admitted.server_build,backendProtocol:BACKEND_PROTOCOL_VERSION,authority:'dedicated-server'});
 });
 
 const queueSchema = z.object({
