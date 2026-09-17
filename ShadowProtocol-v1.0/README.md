@@ -88,7 +88,12 @@ v1.0 introduced:
 - `ASPCharacter` integration for server-side cover probing when lean/peek state changes.
 
 v1.0.1 adds:
-- `USPBuildInfoLibrary` — shared release version, network build id, content revision and exact-match compatibility helpers for Blueprint/C++ session integration.
+- `USPBuildInfoLibrary` — shared release version, network build id, content revision and exact-match compatibility helpers for Blueprint/C++ session integration;
+- `USPBackendSessionSubsystem` — GameInstance-scoped HTTP/JSON bridge for compatibility checks, authenticated Embassy/Protocol allocation, update-required handling and reserved-slot reconnect;
+- Blueprint delegates for compatibility, allocation, reconnect-ticket, reconnect-complete, upgrade-required and request-failure UI states;
+- in-memory session/reconnect token handling with no privileged bootstrap secret embedded in the shipped client.
+
+`ShadowProtocol.Build.cs` now includes `HTTP`, `Json` and `JsonUtilities` for the backend bridge.
 
 Existing foundations include server-authoritative Protocol round state, player slots, authenticated sessions, weapons, health/injuries, lag-compensation hooks, tactical equipment, intelligence nodes, alert state, fortification, doors/security devices, observer rules and competitive scoring.
 
@@ -111,15 +116,27 @@ docker compose up -d
 
 Apply `db/schema.sql` to PostgreSQL before starting persistent services. Replace all development secrets before any production deployment.
 
-The backend protocol is now **`0.8.0`** and server-owned compatibility enforcement is active. The default accepted network build is **`SP-1.0.1`**. Authenticated session creation rejects unsupported builds with HTTP `426`, signed sessions carry build/protocol identity, and match allocation validates both values again before reserving a server. `ACCEPTED_NETWORK_BUILDS` may be used for an explicit controlled rollout window.
+The backend protocol is **`0.8.0`** and server-owned compatibility enforcement is active. The default accepted network build is **`SP-1.0.1`**. Authenticated session creation rejects unsupported builds with HTTP `426`, signed sessions carry build/protocol identity, and match allocation validates both values again before reserving a server. `ACCEPTED_NETWORK_BUILDS` may be used for an explicit controlled rollout policy.
 
-Compatibility metadata is exposed through `/health`, `/v1/compatibility`, authenticated session/allocation responses, reconnect responses and the WebSocket hello payload.
+Compatibility metadata is exposed through `/health`, `/v1/compatibility`, authenticated session/allocation responses, reconnect responses and the WebSocket hello payload. Reconnect endpoints enforce session ownership, hashed reconnect tokens and a 90-second reserved-slot deadline.
+
+### Backend validation
+
+```bash
+cd Backend
+npm install
+npm run typecheck
+npm run test:compatibility
+```
+
+The compatibility test starts the backend without PostgreSQL/Redis and validates the public compatibility contract, rejection of an old build, issuance of an `SP-1.0.1` signed session and successful Embassy/Protocol allocation. GitHub Actions runs this test together with strict TypeScript and browser syntax checks.
 
 ## Documentation
 
 Start with:
 - `Docs/VERTICAL_SLICE_V101.md`
 - `Docs/CHANGELOG_V101.md`
+- `Docs/UE_SESSION_BRIDGE_V101.md`
 - `Docs/VERTICAL_SLICE_V10.md`
 - `Docs/CHANGELOG_V10.md`
 - `Docs/REQUIREMENTS_TRACEABILITY.md`
@@ -129,18 +146,19 @@ Start with:
 
 ## Production validation boundary
 
-The browser v1.0.1 patch has been syntax-checked independently. Backend protocol/build enforcement is implemented at source level and should be validated by CI/typecheck plus configured integration testing. The Unreal additions still require a full Unreal Engine environment for Unreal Header Tool validation, C++ compilation, PIE, packaged-client testing and dedicated-server multiplayer testing.
+Browser syntax and the backend TypeScript/compatibility handshake are validated in GitHub Actions. The Unreal v1.0.1 additions still require a full Unreal Engine environment for Unreal Header Tool validation, C++ compilation, PIE, packaged-client testing and dedicated-server multiplayer testing.
 
 Production content still to author includes final Embassy geometry, skeletal meshes and first-person arms, animation blueprints, UMG production widgets, Niagara effects, MetaSounds/spatial audio, physical material/destruction profiles, nav meshes, online subsystem integration, anti-cheat integration and 10-client network soak testing.
 
 ## Development path after v1.0.1
 
 The next production milestones are:
-1. compile and integrate `USPBuildInfoLibrary` into UMG/online-session code;
-2. connect the UE client to compatibility/session/allocation failure handling;
-3. add automated backend compatibility tests for accepted, rejected, expired and reconnecting sessions;
-4. author the production Embassy map and objective sites;
-5. convert browser diagnostics and settings language into UMG widgets;
-6. add final first-person character/weapon animation and spatial audio;
-7. perform real dedicated-server 5v5 replication, reconnect and latency testing;
-8. expand from the hardened vertical slice toward Alpha content.
+1. compile the v1.0.1 Unreal networking additions in UE5.6 and resolve any UHT/compiler-specific issues;
+2. bind ready-room and reconnect UMG widgets to `USPBackendSessionSubsystem` delegates;
+3. implement the trusted platform/account bootstrap that supplies signed game sessions to Unreal;
+4. add dedicated-server registry/connection-address data to allocation and wire successful allocations to OnlineSubsystem/client travel;
+5. add disposable-PostgreSQL integration coverage for reconnect ownership/deadline behavior;
+6. author the production Embassy map and objective sites;
+7. add final first-person character/weapon animation and spatial audio;
+8. perform real dedicated-server 5v5 replication, reconnect, round-transition and latency testing;
+9. expand from the hardened vertical slice toward Alpha content.
