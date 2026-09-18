@@ -178,3 +178,28 @@ test('expiry UI and ticker handles use the intended Unreal contracts', async () 
     assert.match(header, /FTSTicker::FDelegateHandle/);
   }
 });
+
+test('allocation travel uses the compiled host validator and checks expiry again at travel', async () => {
+  const cpp = await source('../../Source/ShadowProtocol/Private/SPBackendSessionSubsystem.cpp');
+  const travel = cpp.split('FString USPBackendSessionSubsystem::BuildAllocationTravelUrl(')[1].split('void USPBackendSessionSubsystem::RequestReconnectTicket(')[0];
+  assert.match(travel, /SPTravelValidation::IsValidHost/);
+  assert.match(travel, /AllocationExpiry <= FDateTime::UtcNow\(\)/);
+  assert.match(travel, /IsNetworkBuildCompatible\(Allocation.NetworkBuild, true\)/);
+  assert.match(travel, /Allocation.ConnectToken.Len\(\) > 256/);
+  assert.match(travel, /PlayerController->GetGameInstance\(\) != GetGameInstance\(\)/);
+  assert.match(travel, /CanUseAuthenticatedMatchEndpoint\(TEXT\("travel"\)\)/);
+  assert.match(cpp, /ConnectPort == static_cast<double>\(static_cast<int32>\(ConnectPort\)\)/);
+});
+
+test('engine failure reporting is scoped and does not forward raw token-bearing errors', async () => {
+  const cpp = await source('../../Source/ShadowProtocol/Private/SPBackendSessionSubsystem.cpp');
+  for (const type of ['Network', 'Travel']) {
+    assert.match(cpp, new RegExp(`On${type}Failure\\(\\).AddUObject`));
+    assert.match(cpp, new RegExp(`On${type}Failure\\(\\).Remove\\(${type}FailureHandle\\)`));
+  }
+  const handlers = cpp.split('void USPBackendSessionSubsystem::HandleNetworkFailure(')[1].split('bool USPBackendSessionSubsystem::SetSessionExpiry')[0];
+  assert.equal((handlers.match(/World->GetGameInstance\(\) != GetGameInstance\(\)/g) || []).length, 2);
+  assert.doesNotMatch(handlers, /const FString&\s+\w+/);
+  assert.match(handlers, /ReportConnectionFailure\(TEXT\("network"\)/);
+  assert.match(handlers, /ReportConnectionFailure\(TEXT\("travel"\)/);
+});

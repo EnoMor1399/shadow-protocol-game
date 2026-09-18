@@ -44,6 +44,10 @@ jobs:
         run: npm run test:compatibility
       - name: Validate Unreal admission source contract
         run: npm run test:unreal-contract
+      - name: Compile and run shared C++ travel validator
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -I ../Source/ShadowProtocol/Public ../Tests/travel-validation.cpp -o /tmp/sp-travel-validation
+          /tmp/sp-travel-validation
 
   backend-postgres-integration:
     name: Backend PostgreSQL allocation + reconnect

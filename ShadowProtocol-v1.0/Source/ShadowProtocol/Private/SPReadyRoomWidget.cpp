@@ -65,6 +65,8 @@ void USPReadyRoomWidget::RefreshReadyRoom()
     const auto* Backend = Instance ? Instance->GetSubsystem<USPBackendSessionSubsystem>() : nullptr;
     if (Backend && Backend->HasExpiredSession())
         Status += TEXT("\nBackend session expired. Sign in again before matchmaking or reconnect.");
+    if (Backend && !Backend->GetLastConnectionError().IsEmpty())
+        Status += TEXT("\n") + Backend->GetLastConnectionError();
     const FText NewText = FText::FromString(Status);
     if (!StatusText->GetText().EqualTo(NewText)) StatusText->SetText(NewText);
 }

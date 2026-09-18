@@ -1,7 +1,11 @@
 #include "SPBackendSessionSubsystem.h"
 
 #include "SPBuildInfoLibrary.h"
+#include "SPTravelValidation.h"
+#include "Containers/StringConv.h"
 #include "HAL/PlatformTime.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
 #include "Dom/JsonObject.h"
 #include "GameFramework/PlayerController.h"
 #include "Serialization/JsonReader.h"
@@ -28,12 +32,24 @@ FString SerializeJson(const TSharedRef<FJsonObject>& Payload)
 void USPBackendSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
     Super::Initialize(Collection);
+    if (GEngine)
+    {
+        NetworkFailureHandle = GEngine->OnNetworkFailure().AddUObject(this, &USPBackendSessionSubsystem::HandleNetworkFailure);
+        TravelFailureHandle = GEngine->OnTravelFailure().AddUObject(this, &USPBackendSessionSubsystem::HandleTravelFailure);
+    }
     ExpiryTicker = FTSTicker::GetCoreTicker().AddTicker(
         FTickerDelegate::CreateUObject(this, &USPBackendSessionSubsystem::TickSessionExpiry), 1.0f);
 }
 
 void USPBackendSessionSubsystem::Deinitialize()
 {
+    if (GEngine)
+    {
+        GEngine->OnNetworkFailure().Remove(NetworkFailureHandle);
+        GEngine->OnTravelFailure().Remove(TravelFailureHandle);
+    }
+    NetworkFailureHandle.Reset();
+    TravelFailureHandle.Reset();
     FTSTicker::GetCoreTicker().RemoveTicker(ExpiryTicker);
     ExpiryTicker.Reset();
     ClearAuthenticatedSession();
@@ -44,6 +60,27 @@ void USPBackendSessionSubsystem::Deinitialize()
         CompatibilityRequest.Reset();
     }
     Super::Deinitialize();
+}
+
+void USPBackendSessionSubsystem::ReportConnectionFailure(const FString& Context, const FString& Message)
+{
+    LastConnectionError = Message;
+    OnRequestFailed.Broadcast(Context, Message);
+}
+
+void USPBackendSessionSubsystem::HandleNetworkFailure(UWorld* World, UNetDriver*, ENetworkFailure::Type, const FString&)
+{
+    if (!World || World->GetGameInstance() != GetGameInstance()
+        || (World->GetNetMode() != NM_Client && World->GetNetMode() != NM_Standalone)) return;
+    // Engine error strings can contain the token-bearing travel URL. Never relay them.
+    ReportConnectionFailure(TEXT("network"), TEXT("Connection to the game server was lost. Return to matchmaking or use a fresh authorized reconnect."));
+}
+
+void USPBackendSessionSubsystem::HandleTravelFailure(UWorld* World, ETravelFailure::Type, const FString&)
+{
+    if (!World || World->GetGameInstance() != GetGameInstance()
+        || (World->GetNetMode() != NM_Client && World->GetNetMode() != NM_Standalone)) return;
+    ReportConnectionFailure(TEXT("travel"), TEXT("Unable to enter the game server. Request a fresh allocation before trying again."));
 }
 
 bool USPBackendSessionSubsystem::SetSessionExpiry(const FString& ExpiresAt)
@@ -489,9 +526,10 @@ void USPBackendSessionSubsystem::HandleAllocationResponse(FHttpRequestPtr Reques
 
     double ConnectPort = 0.0;
     const bool bHasConnectPort = JsonObject->TryGetNumberField(TEXT("connectPort"), ConnectPort);
-    if (bHasConnectPort)
+    if (bHasConnectPort && FMath::IsFinite(ConnectPort) && ConnectPort >= 1.0 && ConnectPort <= 65535.0
+        && ConnectPort == static_cast<double>(static_cast<int32>(ConnectPort)))
     {
-        Allocation.ConnectPort = FMath::RoundToInt(ConnectPort);
+        Allocation.ConnectPort = static_cast<int32>(ConnectPort);
     }
 
     if (!bHasAllocation || !bHasMatch || !bHasServer || Allocation.ConnectToken.IsEmpty() || !bHasConnectHost || Allocation.ConnectHost.IsEmpty() || !bHasConnectPort || Allocation.ConnectPort < 1 || Allocation.ConnectPort > 65535)
@@ -506,6 +544,11 @@ void USPBackendSessionSubsystem::HandleAllocationResponse(FHttpRequestPtr Reques
         return;
     }
 
+    if (BuildAllocationTravelUrl(Allocation).IsEmpty())
+    {
+        OnRequestFailed.Broadcast(TEXT("allocation"), TEXT("The backend returned an invalid or expired connection target."));
+        return;
+    }
     OnAllocationCompleted.Broadcast(Allocation);
 }
 
@@ -513,6 +556,12 @@ FString USPBackendSessionSubsystem::BuildAllocationTravelUrl(const FSPMatchAlloc
 {
     FGuid AllocationGuid;
     FGuid MatchGuid;
+    FDateTime AllocationExpiry;
+    const FTCHARToUTF8 HostUtf8(*Allocation.ConnectHost);
+    if (!SPTravelValidation::IsValidHost(std::string_view(HostUtf8.Get(), HostUtf8.Length()))
+        || !FDateTime::ParseIso8601(*Allocation.ExpiresAt, AllocationExpiry)
+        || AllocationExpiry <= FDateTime::UtcNow()
+        || !USPBuildInfoLibrary::IsNetworkBuildCompatible(Allocation.NetworkBuild, true)) return FString();
     const auto IsSafeOption = [](const FString& Value)
     {
         if (Value.IsEmpty()) return false;
@@ -536,6 +585,7 @@ FString USPBackendSessionSubsystem::BuildAllocationTravelUrl(const FSPMatchAlloc
         || Allocation.ConnectPort < 1
         || Allocation.ConnectPort > 65535
         || Allocation.ConnectToken.Len() < 24
+        || Allocation.ConnectToken.Len() > 256
         || !IsSafeOption(Allocation.ConnectToken)
         || !IsSafeOption(Allocation.ServerId)
         || !IsSafeOption(Allocation.NetworkBuild))
@@ -560,9 +610,11 @@ FString USPBackendSessionSubsystem::BuildAllocationTravelUrl(const FSPMatchAlloc
         *Allocation.NetworkBuild);
 }
 
-bool USPBackendSessionSubsystem::ConnectToAllocation(APlayerController* PlayerController, const FSPMatchAllocation& Allocation) const
+bool USPBackendSessionSubsystem::ConnectToAllocation(APlayerController* PlayerController, const FSPMatchAllocation& Allocation)
 {
-    if (!PlayerController || !PlayerController->IsLocalController())
+    if (!CanUseAuthenticatedMatchEndpoint(TEXT("travel"))) return false;
+    if (!PlayerController || !PlayerController->IsLocalController()
+        || PlayerController->GetGameInstance() != GetGameInstance())
     {
         return false;
     }
@@ -570,9 +622,11 @@ bool USPBackendSessionSubsystem::ConnectToAllocation(APlayerController* PlayerCo
     const FString TravelUrl = BuildAllocationTravelUrl(Allocation);
     if (TravelUrl.IsEmpty())
     {
+        ReportConnectionFailure(TEXT("travel"), TEXT("The server allocation is invalid, expired or incompatible. Request a fresh allocation."));
         return false;
     }
 
+    ClearConnectionError();
     PlayerController->ClientTravel(TravelUrl, TRAVEL_Absolute);
     return true;
 }

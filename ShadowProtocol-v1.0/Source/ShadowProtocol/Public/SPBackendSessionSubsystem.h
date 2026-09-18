@@ -3,11 +3,14 @@
 #include "CoreMinimal.h"
 #include "Http.h"
 #include "Containers/Ticker.h"
+#include "Engine/EngineBaseTypes.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "SPBackendSessionSubsystem.generated.h"
 
 class FJsonObject;
 class APlayerController;
+class UWorld;
+class UNetDriver;
 
 USTRUCT(BlueprintType)
 struct FSPBackendCompatibility
@@ -131,6 +134,12 @@ public:
     bool HasExpiredSession() const { return bSessionExpired; }
 
     UFUNCTION(BlueprintPure, Category="Shadow Protocol|Network")
+    FString GetLastConnectionError() const { return LastConnectionError; }
+
+    UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
+    void ClearConnectionError() { LastConnectionError.Reset(); }
+
+    UFUNCTION(BlueprintPure, Category="Shadow Protocol|Network")
     float GetSessionSecondsRemaining() const;
 
     UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Network")
@@ -188,7 +197,7 @@ public:
     FString BuildAllocationTravelUrl(const FSPMatchAllocation& Allocation) const;
 
     UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
-    bool ConnectToAllocation(APlayerController* PlayerController, const FSPMatchAllocation& Allocation) const;
+    bool ConnectToAllocation(APlayerController* PlayerController, const FSPMatchAllocation& Allocation);
 
     UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
     void RequestReconnectTicket(const FString& MatchId, int32 RoundNumber, int32 SlotIndex);
@@ -200,6 +209,12 @@ public:
     FSPBackendCompatibility GetLastCompatibility() const { return LastCompatibility; }
 
 private:
+    FDelegateHandle NetworkFailureHandle;
+    FDelegateHandle TravelFailureHandle;
+    FString LastConnectionError;
+    void HandleNetworkFailure(UWorld* World, UNetDriver* Driver, ENetworkFailure::Type Failure, const FString& Error);
+    void HandleTravelFailure(UWorld* World, ETravelFailure::Type Failure, const FString& Error);
+    void ReportConnectionFailure(const FString& Context, const FString& Message);
     FTSTicker::FDelegateHandle ExpiryTicker;
     FDateTime SessionExpiryUtc;
     double SessionExpiryMonotonic = 0.0;

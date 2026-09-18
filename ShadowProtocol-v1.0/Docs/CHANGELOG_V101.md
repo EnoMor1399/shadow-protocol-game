@@ -217,3 +217,11 @@ See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flo
 - Serialize token refresh with match requests; bound HTTP duration and preserve sessions on match-ownership 403.
 - Correct core ticker handle types for client expiry and server heartbeat/rotation.
 - Extend source checks to twelve; see `SESSION_EXPIRY_V101.md` for runtime gates.
+
+## Allocation travel and failure reporting
+
+- Validate DNS/IPv4/IPv6 host syntax and reject URL injection or embedded ports.
+- Recheck allocation expiry/build/token size and local controller ownership before travel.
+- Add scoped engine failure callbacks with sanitized persistent error state and UI hooks.
+- Compile and execute the shared C++ host validator in CI (49 cases plus ASCII sweep).
+- Expand Unreal source contracts to fourteen; document the missing fresh-admission reconnect bridge.
