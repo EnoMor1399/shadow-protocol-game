@@ -42,6 +42,8 @@ jobs:
         run: npm run typecheck
       - name: Test build compatibility handshake
         run: npm run test:compatibility
+      - name: Validate Unreal admission source contract
+        run: npm run test:unreal-contract
 
   backend-postgres-integration:
     name: Backend PostgreSQL allocation + reconnect
