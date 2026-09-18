@@ -250,3 +250,10 @@ x-sp-node-credential: <in-memory node credential>
 ```
 
 Heartbeat, drain, one-time admission, allocation release and authoritative match writes require this node identity. Match-scoped calls are verified against the allocation's `node_id`, preventing one dedicated server from mutating another node's match. Shipped clients never receive either the registration bootstrap secret or node credentials.
+
+
+## Orchestrator-attested registration
+
+For production dedicated servers, registration now has a control-plane proof in addition to the bootstrap secret. The orchestrator injects `SP_NODE_ATTESTATION` into the dedicated-server process. `USPDedicatedServerBackendSubsystem` sends it only as `x-sp-node-attestation` during `POST /v1/servers/register`; it is not exposed through Blueprint or logs.
+
+The backend validates the signed server identity/region/build/public route/capacity and consumes the attestation id once. When registration reports that the attestation was consumed, the Unreal subsystem clears its in-memory copy. An attested server that later loses node authority fails closed and requires orchestrator relaunch with a new attestation rather than replaying the old proof.

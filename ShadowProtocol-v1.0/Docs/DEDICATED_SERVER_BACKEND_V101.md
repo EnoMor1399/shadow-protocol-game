@@ -195,3 +195,12 @@ The backend clamps unsafe values, excludes expired nodes from new scheduling imm
 `USPDedicatedServerBackendSubsystem` schedules rotation at approximately 75% of the issued TTL. The plaintext replacement credential remains in dedicated-server memory only. If rotation transport fails, the subsystem retries before expiry; if authentication indicates an uncertain/lost rotation response, it re-registers through the bootstrap channel. A draining node restores drain state after registration recovery so credential recovery does not intentionally return it to the ready pool.
 
 The migration `v101_node_credential_rotation.sql` adds current expiry plus previous-credential hash/grace metadata and gives existing credentialed nodes a bounded migration expiry.
+
+
+## Orchestrator attestation
+
+Production registration now also requires a short-lived single-use `SP_NODE_ATTESTATION` issued by the trusted orchestration layer. The assertion is bound to the exact server id, region, network build, public host/port and capacity. The backend verifies its HMAC signature, issuer/audience and lifetime, then consumes its unique `jti` transactionally before issuing a node credential.
+
+The dedicated server never receives `ORCHESTRATOR_ATTESTATION_SECRET`. After successful attested registration, `USPDedicatedServerBackendSubsystem` clears its in-memory attestation. If authority is later lost, the process must be relaunched by the orchestrator with a fresh single-use assertion rather than replaying the consumed token.
+
+See `NODE_ATTESTATION_V101.md`.

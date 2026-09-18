@@ -160,3 +160,15 @@ See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flo
 - Previous credentials cannot rotate again; expired credentials must recover through trusted registration.
 - PostgreSQL integration tests validate new/old credential overlap, new-token authority, old-token expiry and stale-token rotation rejection.
 - Unreal dedicated-server bridge schedules automatic rotation at roughly 75% of TTL and can recover registration after ambiguous credential-auth failures without exposing either credential.
+
+
+## Orchestrator-backed node attestation
+
+- Adds `v101_node_attestation.sql` and `server_node_attestations` replay tracking.
+- Production PostgreSQL registration requires a short-lived orchestrator-signed attestation by default.
+- Attestations bind server id, region, network build, public host/port and capacity.
+- Issuer, audience, issue/expiry window and HMAC signature are verified before registration.
+- Attestation `jti` is consumed in the same transaction as node credential issuance; duplicate use returns `server-attestation-replayed`.
+- `game_server_nodes` records the last attestation id/time for audit.
+- Unreal dedicated-server bridge reads `SP_NODE_ATTESTATION` from process environment, sends it only during registration and clears it after successful consumption.
+- Attested authority recovery fails closed and requires fresh orchestrator launch material instead of replaying an old attestation.

@@ -54,6 +54,7 @@ void USPDedicatedServerBackendSubsystem::Deinitialize()
     StopCredentialRotation();
     SendBestEffortShutdownDrain();
     RegistrationSecret.Empty();
+    NodeAttestation.Empty();
     NodeCredential.Empty();
     Super::Deinitialize();
 }
@@ -101,6 +102,9 @@ bool USPDedicatedServerBackendSubsystem::ConfigureFromRuntime()
         RegistrationSecret.TrimStartAndEndInline();
     }
 
+    NodeAttestation = FPlatformMisc::GetEnvironmentVariable(TEXT("SP_NODE_ATTESTATION"));
+    NodeAttestation.TrimStartAndEndInline();
+
     BackendBaseUrl = NormalizeBaseUrl(BackendBaseUrl);
     bConfigured = HasRequiredConfiguration();
 
@@ -143,6 +147,10 @@ TSharedRef<IHttpRequest, ESPMode::ThreadSafe> USPDedicatedServerBackendSubsystem
     if (Path.Equals(TEXT("/v1/servers/register"), ESearchCase::CaseSensitive))
     {
         Request->SetHeader(TEXT("x-match-server-secret"), RegistrationSecret);
+        if (!NodeAttestation.IsEmpty())
+        {
+            Request->SetHeader(TEXT("x-sp-node-attestation"), NodeAttestation);
+        }
     }
     else
     {
@@ -203,6 +211,11 @@ void USPDedicatedServerBackendSubsystem::HandleRegistrationResponse(FHttpRequest
     JsonObject->TryGetStringField(TEXT("nodeCredential"), NodeCredential);
     JsonObject->TryGetStringField(TEXT("credentialExpiresAt"), Registration.CredentialExpiresAt);
 
+    bool bAttested = false;
+    bool bAttestationConsumed = false;
+    JsonObject->TryGetBoolField(TEXT("attested"), bAttested);
+    JsonObject->TryGetBoolField(TEXT("attestationConsumed"), bAttestationConsumed);
+
     double CapacityValue = 0.0;
     double ActiveAllocationsValue = 0.0;
     double HeartbeatTtlValue = 0.0;
@@ -227,6 +240,11 @@ void USPDedicatedServerBackendSubsystem::HandleRegistrationResponse(FHttpRequest
 
     const bool bRestoreDrain = bRestoreDrainAfterRegistration;
     bRestoreDrainAfterRegistration = false;
+    bRegistrationWasAttested = bAttested;
+    if (bAttestationConsumed)
+    {
+        NodeAttestation.Empty();
+    }
     bRegistered = true;
     bDraining = false;
     StartCredentialRotation(Registration.CredentialTtlMs);
@@ -398,6 +416,15 @@ void USPDedicatedServerBackendSubsystem::RecoverNodeRegistration()
     bDraining = false;
     bRestoreDrainAfterRegistration = bWasDraining;
     NodeCredential.Empty();
+
+    if (bRegistrationWasAttested && NodeAttestation.IsEmpty())
+    {
+        OnRequestFailed.Broadcast(
+            TEXT("node-registration-recovery"),
+            TEXT("Node authority was lost after an attested registration. A fresh single-use orchestrator attestation and process relaunch are required."));
+        return;
+    }
+
     RegisterNode();
 }
 

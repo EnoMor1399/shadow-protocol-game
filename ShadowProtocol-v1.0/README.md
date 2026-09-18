@@ -248,3 +248,10 @@ Successful registration rotates a random per-node credential and persists only i
 Per-node credentials are time-bounded rather than permanent. The default policy is a 6-hour credential TTL with a 2-minute previous-credential overlap window. Dedicated servers rotate through `POST /v1/servers/rotate-credential` before expiry. The allocator refuses expired nodes immediately, while the short overlap allows in-flight requests signed with the previous credential to finish without extending that credential's authority indefinitely.
 
 The Unreal dedicated-server bridge schedules rotation at about 75% of the issued lifetime and keeps both bootstrap and node credentials out of Blueprint/event payloads. `v101_node_credential_rotation.sql` is included in both fresh initialization and the v1.0.1 upgrade chain.
+
+
+### Orchestrator-backed server attestation
+
+Production PostgreSQL node enrollment now requires a short-lived control-plane attestation in addition to the registration bootstrap secret. The signed assertion binds server id, region, build, host, port and capacity and has a single-use UUID persisted in `server_node_attestations`; replay returns `409 server-attestation-replayed`.
+
+The orchestration signing secret remains outside the dedicated-server process. The process receives only `SP_NODE_ATTESTATION`, which the Unreal server bridge sends once during registration and clears from its own memory after successful consumption. See `Docs/NODE_ATTESTATION_V101.md`.

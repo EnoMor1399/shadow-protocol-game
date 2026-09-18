@@ -86,8 +86,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSPDedicatedServerBackendFailed, FS
  * Dedicated-server-only bridge for the v1.0.1 regional registry and admission API.
  *
  * The registration bootstrap credential is loaded from SERVER_REGISTRATION_SECRET at runtime.
- * After registration, a per-node credential is kept only in server memory. Neither secret is
- * exposed to Blueprint, config files, logs, SaveGame data or the game client.
+ * An optional single-use orchestrator attestation is loaded from SP_NODE_ATTESTATION and sent
+ * only during registration. After registration, a per-node credential is kept only in server memory.
+ * None of these trust materials are exposed to Blueprint, config files, logs, SaveGame data or the game client.
  * Shipped clients may contain this class as code, but ConfigureFromRuntime refuses
  * to activate it outside a dedicated-server process.
  */
@@ -165,12 +166,14 @@ private:
     int32 PublicPort = 0;
     int32 Capacity = 10;
     FString RegistrationSecret;
+    FString NodeAttestation;
     FString NodeCredential;
 
     bool bConfigured = false;
     bool bRegistered = false;
     bool bDraining = false;
     bool bRestoreDrainAfterRegistration = false;
+    bool bRegistrationWasAttested = false;
     float HeartbeatIntervalSeconds = 10.0f;
     float CredentialRotationDelaySeconds = 0.0f;
     FDelegateHandle HeartbeatTickerHandle;
