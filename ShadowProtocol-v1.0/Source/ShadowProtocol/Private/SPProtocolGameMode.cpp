@@ -15,6 +15,27 @@
 #include "GameFramework/Pawn.h"
 #include "Misc/App.h"
 
+namespace
+{
+bool IsSafeAdmissionOption(const FString& Value)
+{
+    if (Value.IsEmpty()) return false;
+
+    for (int32 Index = 0; Index < Value.Len(); ++Index)
+    {
+        const TCHAR Character = Value[Index];
+        if (!FChar::IsAlnum(Character)
+            && Character != TEXT('-')
+            && Character != TEXT('_')
+            && Character != TEXT('.'))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+}
+
 ASPProtocolGameMode::ASPProtocolGameMode()
 {
     GameStateClass=ASPProtocolGameState::StaticClass();
@@ -69,7 +90,8 @@ bool ASPProtocolGameMode::IsDedicatedAdmissionRequired() const
 
 USPDedicatedServerBackendSubsystem* ASPProtocolGameMode::GetDedicatedServerBackend() const
 {
-    UGameInstance* GameInstance = GetGameInstance();
+    UWorld* World = GetWorld();
+    UGameInstance* GameInstance = World ? World->GetGameInstance() : nullptr;
     return GameInstance ? GameInstance->GetSubsystem<USPDedicatedServerBackendSubsystem>() : nullptr;
 }
 
@@ -96,8 +118,9 @@ void ASPProtocolGameMode::PreLogin(
     if (!FGuid::Parse(AllocationId, AllocationGuid)
         || !FGuid::Parse(MatchId, MatchGuid)
         || ConnectToken.Len() < 24
-        || TargetServerId.IsEmpty()
-        || NetworkBuild.IsEmpty())
+        || !IsSafeAdmissionOption(ConnectToken)
+        || !IsSafeAdmissionOption(TargetServerId)
+        || !IsSafeAdmissionOption(NetworkBuild))
     {
         ErrorMessage = TEXT("Invalid or incomplete Shadow Protocol admission envelope.");
         return;
@@ -341,7 +364,7 @@ void ASPProtocolGameMode::AssignCompetitiveTeam(ASPPlayerState* Player)
     for (APlayerState* BasePS : GameState->PlayerArray)
     {
         const auto* Existing = Cast<ASPPlayerState>(BasePS);
-        if (!Existing || Existing == Player || (bRequireAuthenticatedSessions && !Existing->bSessionAuthenticated))
+        if (!Existing || Existing == Player || (IsDedicatedAdmissionRequired() && !Existing->bSessionAuthenticated))
         {
             continue;
         }
@@ -585,7 +608,7 @@ void ASPProtocolGameMode::RefreshCompetitiveSlots()
         Slot.Team=PS->Team;
         Slot.SpawnGroup=PS->SelectedSpawnGroup;
         Slot.Callsign=PS->GetPlayerName();
-        Slot.SessionId=PS->AuthenticatedSessionId;
+        Slot.SessionId=!PS->AuthenticatedUserId.IsEmpty() ? PS->AuthenticatedUserId : PS->AuthenticatedSessionId;
         Slot.bReady=PS->bReady;
         Slot.ConnectionState=PS->ConnectionState;
         if(Slot.bReady && Slot.ConnectionState==ESPConnectionState::Connected) ++Ready;

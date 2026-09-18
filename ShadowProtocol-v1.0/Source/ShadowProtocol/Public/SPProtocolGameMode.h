@@ -2,13 +2,12 @@
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
 #include "SPTypes.h"
+#include "SPDedicatedServerBackendSubsystem.h"
 #include "SPProtocolGameMode.generated.h"
 
 class ASPPlayerState;
 class APlayerController;
 class AActor;
-class USPDedicatedServerBackendSubsystem;
-struct FSPDedicatedServerAdmission;
 class APlayerStart;
 class ASPCharacter;
 class ASPObjectiveSite;

@@ -384,8 +384,9 @@ FString USPBackendSessionSubsystem::BuildAllocationTravelUrl(const FSPMatchAlloc
     const auto IsSafeOption = [](const FString& Value)
     {
         if (Value.IsEmpty()) return false;
-        for (const TCHAR Character : Value)
+        for (int32 Index = 0; Index < Value.Len(); ++Index)
         {
+            const TCHAR Character = Value[Index];
             if (!FChar::IsAlnum(Character)
                 && Character != TEXT('-')
                 && Character != TEXT('_')
