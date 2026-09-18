@@ -18,7 +18,7 @@ struct FSPPendingPlayerAdmission
     FString AllocationId;
     FString MatchId;
     FString ConnectToken;
-    float DeadlineWorldSeconds = 0.0f;
+    double DeadlineRealSeconds = 0.0;
     bool bRequestStarted = false;
 };
 

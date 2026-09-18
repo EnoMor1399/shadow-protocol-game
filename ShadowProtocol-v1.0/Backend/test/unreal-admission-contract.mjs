@@ -59,3 +59,41 @@ test('Protocol GameMode gates spawn and competitive slots until backend admissio
   assert.match(playerStateHeader, /AuthenticatedUserId/);
   assert.match(playerStateCpp, /DOREPLIFETIME\(ASPPlayerState, AuthenticatedUserId\)/);
 });
+
+test('dedicated build wires the NULL provider and GameMode-owned online session', async () => {
+  const project = JSON.parse(await source('../../ShadowProtocol.uproject'));
+  assert.ok(project.Plugins.some(p => p.Name === 'OnlineSubsystemNull' && p.Enabled));
+  assert.match(await source('../../Source/ShadowProtocolServer.Target.cs'), /Type = TargetType.Server/);
+  const mode = await source('../../Source/ShadowProtocol/Private/SPProtocolGameMode.cpp');
+  assert.match(mode, /GameSessionClass=ASPOnlineGameSession::StaticClass\(\)/);
+  assert.match(mode, /DefaultPawnClass=ASPCharacter::StaticClass\(\)/);
+  const preparation = mode.split('void ASPProtocolGameMode::BeginPreparation()')[1].split('void ASPProtocolGameMode::BeginDeployment()')[0];
+  assert.ok(preparation.indexOf('StartProtocolSession()') < preparation.indexOf('ResetRoundState()'));
+  assert.match(mode, /OnlineSession->EndProtocolSession\(\)/);
+});
+
+test('OSS source contract keeps admission private and bounds asynchronous operations', async () => {
+  const session = await source('../../Source/ShadowProtocol/Private/SPOnlineGameSession.cpp');
+  assert.match(session, /Online::GetSessionInterface\(GetWorld\(\)\)/);
+  assert.match(session, /Settings.bShouldAdvertise = false/);
+  assert.match(session, /Settings.bAllowInvites = false/);
+  for (const operation of ['Create', 'Start', 'End']) {
+    assert.match(session, new RegExp(`Sessions->${operation}Session\\(`));
+    assert.match(session, new RegExp(`ClearOn${operation}SessionCompleteDelegate_Handle`));
+  }
+  assert.match(session, /FPlatformTime::Seconds\(\) >= OperationDeadline/);
+  assert.match(session, /Backend->MarkDraining\(\)/);
+  assert.match(session, /bOwnsSession && Sessions->GetNamedSession/);
+  assert.doesNotMatch(session, /Settings\.Set\([^;]*(?:ConnectToken|NodeCredential|SessionToken)/);
+});
+
+test('late admissions cannot bypass timeout, provider loss or dedicated identity authority', async () => {
+  const mode = await source('../../Source/ShadowProtocol/Private/SPProtocolGameMode.cpp');
+  const promotion = mode.split('void ASPProtocolGameMode::PromoteAdmittedPlayer(')[1].split('void ASPProtocolGameMode::HandleBackendAdmissionFailed')[0];
+  assert.match(promotion, /Pending->DeadlineRealSeconds <= FPlatformTime::Seconds\(\)/);
+  assert.match(promotion, /!OnlineSession->IsAcceptingAdmissions\(\)/);
+  assert.match(promotion, /Backend->IsDraining\(\)/);
+  assert.ok(promotion.indexOf('DeadlineRealSeconds') < promotion.indexOf('PS->bSessionAuthenticated = true'));
+  assert.match(mode, /if\(IsDedicatedAdmissionRequired\(\) \|\| !Player \|\| SessionId.Len\(\)<8\) return false/);
+  assert.match(mode, /if \(GameSession && GameSession->KickPlayer\(PlayerController, ReasonText\)\) return/);
+});

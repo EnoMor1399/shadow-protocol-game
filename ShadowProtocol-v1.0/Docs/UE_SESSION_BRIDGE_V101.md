@@ -170,7 +170,7 @@ Recovery sequence:
 
 **Transport Loss → Refresh Session if Needed → Reconnect Ticket → Reserved Slot Countdown → Reconnect → Restore Slot → Resume Match**
 
-The subsystem stops before transport-specific server travel. It supplies backend-owned connection metadata and a short-lived token; actual `ClientTravel` / OnlineSubsystem transport and dedicated-server redemption remain the responsibility of the connection/server admission layers.
+`ConnectToAllocation` performs validated absolute IP `ClientTravel`; the GameMode redeems the admission token before pawn startup. `ASPOnlineGameSession` supplies the dedicated-server OnlineSubsystem lifecycle. Provider-specific Steam/EOS identity bootstrap and client `JoinSession` discovery are still pending; the current route uses backend allocation with the NULL/IP transport.
 
 ## Build compatibility behavior
 

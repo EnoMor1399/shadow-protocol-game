@@ -188,3 +188,14 @@ See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flo
 - Pending disconnects do not create reconnect reservations.
 - `ASPPlayerState` now carries a replicated backend-authenticated user id.
 - Adds `test/unreal-admission-contract.mjs` and a CI step that guards the source-level travel/admission contract until UE5.6 compilation is available.
+
+## Dedicated OnlineSubsystem session pass
+
+- Add `ASPOnlineGameSession` and wire GameModeBase's custom match transitions to
+  asynchronous OSS create/start/end, with monotonic timeouts and fail-closed admission.
+- Add the UE dedicated-server target and explicitly enable the NULL provider.
+- Set the native competitive pawn, recheck expired/lost-authority admission callbacks,
+  enforce kick fallback, and disable manual identity promotion on dedicated servers.
+- Extend CI from three to six Unreal source-contract checks. See
+  `ONLINE_GAME_SESSION_V101.md` for build commands and pending runtime gates.
+- UHT, UE compilation, Steam/EOS bootstrap and packaged 10-client validation remain pending.

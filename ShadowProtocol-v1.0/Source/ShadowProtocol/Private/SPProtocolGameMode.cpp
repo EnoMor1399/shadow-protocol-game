@@ -1,4 +1,5 @@
 #include "SPProtocolGameMode.h"
+#include "SPOnlineGameSession.h"
 #include "SPProtocolGameState.h"
 #include "SPPlayerState.h"
 #include "SPCharacter.h"
@@ -14,6 +15,7 @@
 #include "Engine/GameInstance.h"
 #include "GameFramework/Pawn.h"
 #include "Misc/App.h"
+#include "HAL/PlatformTime.h"
 
 namespace
 {
@@ -38,6 +40,8 @@ bool IsSafeAdmissionOption(const FString& Value)
 
 ASPProtocolGameMode::ASPProtocolGameMode()
 {
+    GameSessionClass=ASPOnlineGameSession::StaticClass();
+    DefaultPawnClass=ASPCharacter::StaticClass();
     GameStateClass=ASPProtocolGameState::StaticClass();
     PlayerStateClass=ASPPlayerState::StaticClass();
     PlayerControllerClass=ASPObserverPlayerController::StaticClass();
@@ -107,6 +111,13 @@ void ASPProtocolGameMode::PreLogin(
         return;
     }
 
+    const auto* OnlineSession = Cast<ASPOnlineGameSession>(GameSession);
+    if (!OnlineSession || !OnlineSession->IsAcceptingAdmissions())
+    {
+        ErrorMessage = TEXT("Dedicated server online session is unavailable.");
+        return;
+    }
+
     const FString AllocationId = UGameplayStatics::ParseOption(Options, TEXT("spAllocationId"));
     const FString MatchId = UGameplayStatics::ParseOption(Options, TEXT("spMatchId"));
     const FString ConnectToken = UGameplayStatics::ParseOption(Options, TEXT("spConnectToken"));
@@ -171,7 +182,7 @@ FString ASPProtocolGameMode::InitNewPlayer(
     Pending.AllocationId = AllocationId;
     Pending.MatchId = MatchId;
     Pending.ConnectToken = ConnectToken;
-    Pending.DeadlineWorldSeconds = (GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f) + FMath::Max(3.0f, PendingAdmissionTimeoutSeconds);
+    Pending.DeadlineRealSeconds = FPlatformTime::Seconds() + FMath::Max(3.0f, PendingAdmissionTimeoutSeconds);
     PendingAdmissions.Add(AllocationId, MoveTemp(Pending));
     return FString();
 }
@@ -220,6 +231,11 @@ void ASPProtocolGameMode::ResetRoundState()
 
 void ASPProtocolGameMode::BeginPreparation()
 {
+    if (IsDedicatedAdmissionRequired())
+    {
+        auto* OnlineSession = Cast<ASPOnlineGameSession>(GameSession);
+        if (!OnlineSession || !OnlineSession->StartProtocolSession()) return;
+    }
     if(auto* GS=GetGameState<ASPProtocolGameState>())
     {
         ResetRoundState();
@@ -417,6 +433,16 @@ void ASPProtocolGameMode::PromoteAdmittedPlayer(APlayerController* PlayerControl
         return;
     }
 
+    const auto* OnlineSession = Cast<ASPOnlineGameSession>(GameSession);
+    const auto* Backend = GetDedicatedServerBackend();
+    if (!Pending->bRequestStarted || Pending->DeadlineRealSeconds <= FPlatformTime::Seconds()
+        || !OnlineSession || !OnlineSession->IsAcceptingAdmissions()
+        || !Backend || !Backend->IsRegistered() || Backend->IsDraining())
+    {
+        RejectPendingAdmission(Admission.AllocationId, TEXT("Admission expired or server became unavailable."));
+        return;
+    }
+
     ASPPlayerState* PS = PlayerController->GetPlayerState<ASPPlayerState>();
     if (!PS || Admission.UserId.IsEmpty())
     {
@@ -474,15 +500,9 @@ void ASPProtocolGameMode::DisconnectPlayer(APlayerController* PlayerController, 
     }
 
     const FText ReasonText = FText::FromString(Reason.IsEmpty() ? TEXT("Dedicated-server admission denied.") : Reason);
-    if (GameSession)
-    {
-        GameSession->KickPlayer(PlayerController, ReasonText);
-    }
-    else
-    {
-        PlayerController->ClientReturnToMainMenuWithTextReason(ReasonText);
-        PlayerController->Destroy();
-    }
+    if (GameSession && GameSession->KickPlayer(PlayerController, ReasonText)) return;
+    PlayerController->ClientReturnToMainMenuWithTextReason(ReasonText);
+    PlayerController->Destroy();
 }
 
 void ASPProtocolGameMode::UpdatePendingAdmissions()
@@ -492,11 +512,11 @@ void ASPProtocolGameMode::UpdatePendingAdmissions()
         return;
     }
 
-    const float Now = GetWorld()->GetTimeSeconds();
+    const double Now = FPlatformTime::Seconds();
     TArray<FString> ExpiredAllocations;
     for (const TPair<FString, FSPPendingPlayerAdmission>& Pair : PendingAdmissions)
     {
-        if (!Pair.Value.Controller.IsValid() || Pair.Value.DeadlineWorldSeconds <= Now)
+        if (!Pair.Value.Controller.IsValid() || Pair.Value.DeadlineRealSeconds <= Now)
         {
             ExpiredAllocations.Add(Pair.Key);
         }
@@ -673,6 +693,7 @@ void ASPProtocolGameMode::FinishRound(ESPTeam Winner,const FString& Reason)
     const bool bMatchWon=GS->DirectorateRoundWins>=RoundsToWin || GS->HelixRoundWins>=RoundsToWin || GS->RoundNumber>=MaxRounds;
     if(bMatchWon)
     {
+        if (auto* OnlineSession = Cast<ASPOnlineGameSession>(GameSession)) OnlineSession->EndProtocolSession();
         GS->bMatchComplete=true;
         GS->MatchPhase=ESPMatchPhase::MatchComplete;
         GS->RoundState=ESPRoundState::Complete;
@@ -690,7 +711,8 @@ void ASPProtocolGameMode::FinishRound(ESPTeam Winner,const FString& Reason)
 
 bool ASPProtocolGameMode::AuthorizePlayerSession(ASPPlayerState* Player,const FString& SessionId)
 {
-    if(!Player || SessionId.Len()<8) return false;
+    // Dedicated identities can only be promoted by one-time backend redemption.
+    if(IsDedicatedAdmissionRequired() || !Player || SessionId.Len()<8) return false;
     auto* GS=GetGameState<ASPProtocolGameState>();
     if(GS)
     {
