@@ -15,13 +15,15 @@ const plans = {
     new URL('../db/v101_connection_target.sql', import.meta.url),
     new URL('../db/v101_server_registry.sql', import.meta.url),
     new URL('../db/v101_node_credentials.sql', import.meta.url),
-    new URL('../db/v101_node_credential_rotation.sql', import.meta.url)
+    new URL('../db/v101_node_credential_rotation.sql', import.meta.url),
+    new URL('../db/v101_node_attestation.sql', import.meta.url)
   ],
   v101: [
     new URL('../db/v101_connection_target.sql', import.meta.url),
     new URL('../db/v101_server_registry.sql', import.meta.url),
     new URL('../db/v101_node_credentials.sql', import.meta.url),
-    new URL('../db/v101_node_credential_rotation.sql', import.meta.url)
+    new URL('../db/v101_node_credential_rotation.sql', import.meta.url),
+    new URL('../db/v101_node_attestation.sql', import.meta.url)
   ]
 };
 

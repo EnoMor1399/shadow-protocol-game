@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { spawn } from 'node:child_process';
 import pg from 'pg';
+import { createHmac, randomUUID } from 'node:crypto';
 
 const { Client } = pg;
 const PORT = 18082;
@@ -9,6 +10,7 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 const DATABASE_URL = process.env.DATABASE_URL;
 const BOOTSTRAP_SECRET = 'ci-postgres-bootstrap-secret';
 const SERVER_REGISTRATION_SECRET = 'ci-postgres-registration-secret';
+const ORCHESTRATOR_ATTESTATION_SECRET = 'ci-postgres-orchestrator-attestation-secret';
 const PRIMARY_SERVER_ID = 'ACC-PRIMARY';
 const PRIMARY_SERVER_HOST = '10.10.0.10';
 const PRIMARY_SERVER_PORT = 7781;
@@ -32,8 +34,30 @@ async function waitForServer() {
   throw lastError ?? new Error('Shadow Protocol PostgreSQL integration backend did not become ready.');
 }
 
-async function bootstrapPost(path, body) {
-  return fetch(`${BASE_URL}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-match-server-secret': SERVER_REGISTRATION_SECRET }, body: JSON.stringify(body) });
+function issueServerAttestation(body, overrides = {}) {
+  const iat = Date.now();
+  const claims = {
+    jti: randomUUID(),
+    iss: 'shadow-protocol-orchestrator',
+    aud: 'shadow-protocol-server-registration',
+    iat,
+    exp: iat + 60_000,
+    serverId: body.serverId,
+    region: body.region,
+    networkBuild: body.networkBuild,
+    publicHost: body.publicHost,
+    publicPort: body.publicPort,
+    capacity: body.capacity,
+    ...overrides
+  };
+  const encoded = Buffer.from(JSON.stringify(claims)).toString('base64url');
+  const signature = createHmac('sha256', ORCHESTRATOR_ATTESTATION_SECRET).update(encoded).digest('base64url');
+  return `${encoded}.${signature}`;
+}
+async function bootstrapPost(path, body, attestation = '') {
+  const headers = { 'content-type': 'application/json', 'x-match-server-secret': SERVER_REGISTRATION_SECRET };
+  if (attestation) headers['x-sp-node-attestation'] = attestation;
+  return fetch(`${BASE_URL}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
 }
 async function nodePost(path, body, serverId, nodeCredential) {
   return fetch(`${BASE_URL}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-sp-server-id': serverId, 'x-sp-node-credential': nodeCredential }, body: JSON.stringify(body) });
@@ -60,6 +84,9 @@ before(async () => {
       SESSION_SIGNING_SECRET: 'ci-postgres-session-signing-secret',
       SESSION_BOOTSTRAP_SECRET: BOOTSTRAP_SECRET,
       SERVER_REGISTRATION_SECRET,
+      ORCHESTRATOR_ATTESTATION_SECRET,
+      REQUIRE_SERVER_ATTESTATION: 'true',
+      SERVER_ATTESTATION_MAX_TTL_MS: '120000',
       ACCEPTED_NETWORK_BUILDS: 'SP-1.0.1',
       SERVER_HEARTBEAT_TTL_MS: '30000',
       NODE_CREDENTIAL_TTL_MS: '600000',
@@ -92,44 +119,64 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   });
   assert.equal(publicRegistration.status, 401);
 
-  const primaryRegistration = await bootstrapPost('/v1/servers/register', {
+  const primaryBody = {
     serverId: PRIMARY_SERVER_ID,
     region: 'acc',
     networkBuild: 'SP-1.0.1',
     publicHost: PRIMARY_SERVER_HOST,
     publicPort: PRIMARY_SERVER_PORT,
     capacity: 1
-  });
+  };
+
+  const missingAttestation = await bootstrapPost('/v1/servers/register', primaryBody);
+  assert.equal(missingAttestation.status, 401);
+  assert.equal((await missingAttestation.json()).error, 'server-attestation-required');
+
+  const mismatchedAttestation = issueServerAttestation(primaryBody, { serverId: 'ACC-OTHER' });
+  const mismatchResponse = await bootstrapPost('/v1/servers/register', primaryBody, mismatchedAttestation);
+  assert.equal(mismatchResponse.status, 403);
+  assert.equal((await mismatchResponse.json()).error, 'server-attestation-mismatch');
+
+  const primaryAttestation = issueServerAttestation(primaryBody);
+  const primaryRegistration = await bootstrapPost('/v1/servers/register', primaryBody, primaryAttestation);
   assert.equal(primaryRegistration.status, 200);
   const primaryNode = await primaryRegistration.json();
   assert.ok(primaryNode.nodeCredential.length >= 32);
   assert.equal(primaryNode.credentialTtlMs, 600000);
   assert.equal(primaryNode.credentialGraceMs, 30000);
   assert.ok(Date.parse(primaryNode.credentialExpiresAt) > Date.now());
+  assert.equal(primaryNode.attested, true);
+  assert.equal(primaryNode.attestationConsumed, true);
   let primaryCredential = primaryNode.nodeCredential;
 
-  const drainRegistration = await bootstrapPost('/v1/servers/register', {
+  const replayRegistration = await bootstrapPost('/v1/servers/register', primaryBody, primaryAttestation);
+  assert.equal(replayRegistration.status, 409);
+  assert.equal((await replayRegistration.json()).error, 'server-attestation-replayed');
+
+  const drainBody = {
     serverId: 'ACC-DRAIN',
     region: 'acc',
     networkBuild: 'SP-1.0.1',
     publicHost: '10.10.0.11',
     publicPort: 7782,
     capacity: 10
-  });
+  };
+  const drainRegistration = await bootstrapPost('/v1/servers/register', drainBody, issueServerAttestation(drainBody));
   assert.equal(drainRegistration.status, 200);
   const drainNode = await drainRegistration.json();
   assert.ok(drainNode.nodeCredential.length >= 32);
   const drainResponse = await nodePost('/v1/servers/drain', { serverId: 'ACC-DRAIN' }, 'ACC-DRAIN', drainNode.nodeCredential);
   assert.equal(drainResponse.status, 200);
 
-  const staleRegistration = await bootstrapPost('/v1/servers/register', {
+  const staleBody = {
     serverId: 'ACC-STALE',
     region: 'acc',
     networkBuild: 'SP-1.0.1',
     publicHost: '10.10.0.12',
     publicPort: 7783,
     capacity: 10
-  });
+  };
+  const staleRegistration = await bootstrapPost('/v1/servers/register', staleBody, issueServerAttestation(staleBody));
   assert.equal(staleRegistration.status, 200);
   const staleNode = await staleRegistration.json();
   assert.ok(staleNode.nodeCredential.length >= 32);
@@ -182,10 +229,12 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   assert.equal(persistedAllocation.rows[0].connect_token_consumed_at, null);
   assert.notEqual(persistedAllocation.rows[0].connect_token_hash, allocation.connectToken);
 
-  const primaryLoad = await db.query(`select active_allocations,credential_hash from game_server_nodes where server_id=$1`, [PRIMARY_SERVER_ID]);
+  const primaryLoad = await db.query(`select active_allocations,credential_hash,last_attestation_id,last_attested_at from game_server_nodes where server_id=$1`, [PRIMARY_SERVER_ID]);
   assert.equal(Number(primaryLoad.rows[0].active_allocations), 1);
   assert.ok(primaryLoad.rows[0].credential_hash);
   assert.notEqual(primaryLoad.rows[0].credential_hash, primaryCredential);
+  assert.ok(primaryLoad.rows[0].last_attestation_id);
+  assert.ok(primaryLoad.rows[0].last_attested_at);
 
   const saturatedResponse = await fetch(`${BASE_URL}/v1/matches/allocate`, {
     method: 'POST',

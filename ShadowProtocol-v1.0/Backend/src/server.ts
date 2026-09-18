@@ -34,6 +34,15 @@ const credentialGraceCandidate = Number(process.env.NODE_CREDENTIAL_GRACE_MS ?? 
 const NODE_CREDENTIAL_GRACE_MS = Number.isFinite(credentialGraceCandidate)
   ? Math.min(Math.min(600_000, Math.floor(NODE_CREDENTIAL_TTL_MS / 2)), Math.max(5_000, Math.trunc(credentialGraceCandidate)))
   : 120_000;
+const REQUIRE_SERVER_ATTESTATION = (process.env.REQUIRE_SERVER_ATTESTATION ?? (IS_PRODUCTION && Boolean(pool) ? 'true' : 'false')).trim().toLowerCase() === 'true';
+const ORCHESTRATOR_ATTESTATION_SECRET = (process.env.ORCHESTRATOR_ATTESTATION_SECRET ?? '').trim();
+const attestationTtlCandidate = Number(process.env.SERVER_ATTESTATION_MAX_TTL_MS ?? 120_000);
+const SERVER_ATTESTATION_MAX_TTL_MS = Number.isFinite(attestationTtlCandidate)
+  ? Math.min(300_000, Math.max(30_000, Math.trunc(attestationTtlCandidate)))
+  : 120_000;
+const SERVER_ATTESTATION_CLOCK_SKEW_MS = 15_000;
+const SERVER_ATTESTATION_ISSUER = 'shadow-protocol-orchestrator';
+const SERVER_ATTESTATION_AUDIENCE = 'shadow-protocol-server-registration';
 const ACCEPTED_NETWORK_BUILDS = new Set(
   (process.env.ACCEPTED_NETWORK_BUILDS ?? NETWORK_BUILD)
     .split(',')
@@ -56,6 +65,10 @@ const SERVER_REGISTRATION_SECRET = process.env.SERVER_REGISTRATION_SECRET ?? pro
 const b64url=(value:string|Buffer)=>Buffer.from(value).toString('base64url');
 const sha256=(value:string)=>createHash('sha256').update(value).digest('hex');
 type SessionPayload={sid:string;uid:string;exp:number;region:string;build:string;protocol:string};
+type ServerAttestationPayload={
+  jti:string;iss:string;aud:string;iat:number;exp:number;serverId:string;region:string;networkBuild:string;
+  publicHost:string;publicPort:number;capacity:number;
+};
 type ConnectTarget={host:string;port:number};
 type RegisteredServerTarget=ConnectTarget&{nodeId:string;serverId:string;capacity:number;activeAllocations:number};
 type AuthenticatedServerNode={nodeId:string;serverId:string;region:string;networkBuild:string;status:string;authSlot:'current'|'previous'};
@@ -85,6 +98,39 @@ function requireServerRegistrationBootstrap(req:any, reply:any){
     return false;
   }
   return true;
+}
+const serverAttestationClaimsSchema=z.object({
+  jti:z.string().uuid(),iss:z.literal(SERVER_ATTESTATION_ISSUER),aud:z.literal(SERVER_ATTESTATION_AUDIENCE),
+  iat:z.number().int().positive(),exp:z.number().int().positive(),
+  serverId:z.string().min(2).max(64),region:z.string().min(2).max(16),networkBuild:z.string().min(2).max(32),
+  publicHost:z.string().trim().min(1).max(255),publicPort:z.number().int().min(1).max(65535),capacity:z.number().int().min(1).max(128)
+});
+function verifyServerAttestation(token:string):ServerAttestationPayload|null{
+  if(!token||!ORCHESTRATOR_ATTESTATION_SECRET)return null;
+  const [encoded,sig]=token.split('.');if(!encoded||!sig)return null;
+  const expected=createHmac('sha256',ORCHESTRATOR_ATTESTATION_SECRET).update(encoded).digest();
+  let supplied:Buffer;try{supplied=Buffer.from(sig,'base64url')}catch{return null}
+  if(expected.length!==supplied.length||!timingSafeEqual(expected,supplied))return null;
+  try{
+    const raw=JSON.parse(Buffer.from(encoded,'base64url').toString('utf8'));
+    const parsed=serverAttestationClaimsSchema.safeParse(raw);if(!parsed.success)return null;
+    const claims=parsed.data,now=Date.now();
+    if(claims.iat>now+SERVER_ATTESTATION_CLOCK_SKEW_MS)return null;
+    if(claims.exp<=now-SERVER_ATTESTATION_CLOCK_SKEW_MS)return null;
+    if(claims.exp<=claims.iat||claims.exp-claims.iat>SERVER_ATTESTATION_MAX_TTL_MS)return null;
+    if(claims.iat<now-SERVER_ATTESTATION_MAX_TTL_MS-SERVER_ATTESTATION_CLOCK_SKEW_MS)return null;
+    return claims;
+  }catch{return null}
+}
+function attestationMatchesRegistration(attestation:ServerAttestationPayload,registration:{
+  serverId:string;region:string;networkBuild:string;publicHost:string;publicPort:number;capacity:number;
+}){
+  return attestation.serverId===registration.serverId
+    && attestation.region===registration.region
+    && attestation.networkBuild===registration.networkBuild
+    && attestation.publicHost===registration.publicHost
+    && attestation.publicPort===registration.publicPort
+    && attestation.capacity===registration.capacity;
 }
 function secureHashMatches(storedHash:string,suppliedSecret:string){
   const suppliedHash=sha256(suppliedSecret);
@@ -183,7 +229,9 @@ async function reserveRegisteredServer(client:any,region:string,build:string):Pr
 app.get('/health', async () => ({
   service: 'shadow-protocol-backend', ok: true, version: BACKEND_PROTOCOL_VERSION,
   serverRegistry: { enabled:Boolean(pool), heartbeatTtlMs:SERVER_HEARTBEAT_TTL_MS, productionRequiresHealthyNode:IS_PRODUCTION,
-    nodeCredentialTtlMs:NODE_CREDENTIAL_TTL_MS,nodeCredentialGraceMs:NODE_CREDENTIAL_GRACE_MS },
+    nodeCredentialTtlMs:NODE_CREDENTIAL_TTL_MS,nodeCredentialGraceMs:NODE_CREDENTIAL_GRACE_MS,
+    attestationRequired:REQUIRE_SERVER_ATTESTATION,attestationVerifierConfigured:Boolean(ORCHESTRATOR_ATTESTATION_SECRET),
+    attestationMaxTtlMs:SERVER_ATTESTATION_MAX_TTL_MS },
   ...compatibilityPayload()
 }));
 app.get('/v1/compatibility', async () => compatibilityPayload());
@@ -198,17 +246,43 @@ app.post('/v1/servers/register',async(req,reply)=>{
   const parsed=serverRegistrationSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(!pool)return reply.code(503).send({error:'database-not-configured'});
   if(!isBuildCompatible(parsed.data.networkBuild))return reply.code(409).send({error:'server-build-incompatible',receivedBuild:parsed.data.networkBuild,...compatibilityPayload()});
+
+  const attestationToken=String(req.headers['x-sp-node-attestation']??'').trim();
+  let attestation:ServerAttestationPayload|null=null;
+  if(REQUIRE_SERVER_ATTESTATION||attestationToken){
+    if(!attestationToken)return reply.code(401).send({error:'server-attestation-required'});
+    if(!ORCHESTRATOR_ATTESTATION_SECRET)return reply.code(503).send({error:'server-attestation-verifier-not-configured'});
+    attestation=verifyServerAttestation(attestationToken);
+    if(!attestation)return reply.code(401).send({error:'server-attestation-invalid'});
+    if(!attestationMatchesRegistration(attestation,parsed.data))return reply.code(403).send({error:'server-attestation-mismatch'});
+  }
+
   const nodeCredential=randomBytes(32).toString('base64url'),credentialHash=sha256(nodeCredential),credentialExpiresAt=Date.now()+NODE_CREDENTIAL_TTL_MS;
-  const r=await pool.query(`insert into game_server_nodes(server_id,region,network_build,public_host,public_port,status,capacity,last_heartbeat_at,credential_hash,credential_issued_at,credential_expires_at,credential_revoked_at,previous_credential_hash,previous_credential_valid_until)
-    values($1,$2,$3,$4,$5,'ready',$6,now(),$7,now(),to_timestamp($8/1000.0),null,null,null)
-    on conflict(server_id) do update set region=excluded.region,network_build=excluded.network_build,public_host=excluded.public_host,
-      public_port=excluded.public_port,capacity=excluded.capacity,status='ready',last_heartbeat_at=now(),credential_hash=excluded.credential_hash,
-      credential_issued_at=now(),credential_expires_at=excluded.credential_expires_at,credential_revoked_at=null,
-      previous_credential_hash=null,previous_credential_valid_until=null,updated_at=now()
-    returning id as node_id,server_id,region,network_build,public_host,public_port,status,capacity,active_allocations,last_heartbeat_at,credential_expires_at`,
-    [parsed.data.serverId,parsed.data.region,parsed.data.networkBuild,parsed.data.publicHost,parsed.data.publicPort,parsed.data.capacity,credentialHash,credentialExpiresAt]);
-  return reply.send({...r.rows[0],heartbeatTtlMs:SERVER_HEARTBEAT_TTL_MS,nodeCredential,credentialTtlMs:NODE_CREDENTIAL_TTL_MS,
-    credentialGraceMs:NODE_CREDENTIAL_GRACE_MS,credentialExpiresAt:new Date(credentialExpiresAt).toISOString()});
+  const client=await pool.connect();
+  try{
+    await client.query('begin');
+    if(attestation){
+      await client.query(`delete from server_node_attestations where expires_at<now()-interval '24 hours'`);
+      const consumed=await client.query(`insert into server_node_attestations(id,server_id,region,network_build,issued_at,expires_at,consumed_at)
+        values($1,$2,$3,$4,to_timestamp($5/1000.0),to_timestamp($6/1000.0),now())
+        on conflict(id) do nothing returning id`,
+        [attestation.jti,attestation.serverId,attestation.region,attestation.networkBuild,attestation.iat,attestation.exp]);
+      if(!consumed.rowCount){await client.query('rollback');return reply.code(409).send({error:'server-attestation-replayed'});}
+    }
+    const r=await client.query(`insert into game_server_nodes(server_id,region,network_build,public_host,public_port,status,capacity,last_heartbeat_at,credential_hash,credential_issued_at,credential_expires_at,credential_revoked_at,previous_credential_hash,previous_credential_valid_until,last_attestation_id,last_attested_at)
+      values($1,$2,$3,$4,$5,'ready',$6,now(),$7,now(),to_timestamp($8/1000.0),null,null,null,$9,case when $9::uuid is null then null else now() end)
+      on conflict(server_id) do update set region=excluded.region,network_build=excluded.network_build,public_host=excluded.public_host,
+        public_port=excluded.public_port,capacity=excluded.capacity,status='ready',last_heartbeat_at=now(),credential_hash=excluded.credential_hash,
+        credential_issued_at=now(),credential_expires_at=excluded.credential_expires_at,credential_revoked_at=null,
+        previous_credential_hash=null,previous_credential_valid_until=null,last_attestation_id=excluded.last_attestation_id,
+        last_attested_at=excluded.last_attested_at,updated_at=now()
+      returning id as node_id,server_id,region,network_build,public_host,public_port,status,capacity,active_allocations,last_heartbeat_at,credential_expires_at,last_attested_at`,
+      [parsed.data.serverId,parsed.data.region,parsed.data.networkBuild,parsed.data.publicHost,parsed.data.publicPort,parsed.data.capacity,credentialHash,credentialExpiresAt,attestation?.jti??null]);
+    await client.query('commit');
+    return reply.send({...r.rows[0],heartbeatTtlMs:SERVER_HEARTBEAT_TTL_MS,nodeCredential,credentialTtlMs:NODE_CREDENTIAL_TTL_MS,
+      credentialGraceMs:NODE_CREDENTIAL_GRACE_MS,credentialExpiresAt:new Date(credentialExpiresAt).toISOString(),
+      attested:Boolean(attestation),attestationConsumed:Boolean(attestation)});
+  }catch(error){await client.query('rollback');throw error;}finally{client.release();}
 });
 
 const serverRotateCredentialSchema=z.object({serverId:z.string().min(2).max(64)});
