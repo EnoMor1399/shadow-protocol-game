@@ -84,6 +84,7 @@ void ASPProtocolGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
         Backend->OnAdmissionFailed.RemoveDynamic(this, &ASPProtocolGameMode::HandleBackendAdmissionFailed);
     }
     PendingAdmissions.Reset();
+    AdmittedPlayerMatches.Reset();
     Super::EndPlay(EndPlayReason);
 }
 
@@ -124,10 +125,19 @@ void ASPProtocolGameMode::PreLogin(
     const FString TargetServerId = UGameplayStatics::ParseOption(Options, TEXT("spServerId"));
     const FString NetworkBuild = UGameplayStatics::ParseOption(Options, TEXT("spNetworkBuild"));
 
+    const FString ReconnectGrantId = UGameplayStatics::ParseOption(Options, TEXT("spReconnectGrantId"));
+    FGuid ReconnectGuid;
+    if (!ReconnectGrantId.IsEmpty() && !FGuid::Parse(ReconnectGrantId, ReconnectGuid))
+    {
+        ErrorMessage = TEXT("Invalid reconnect grant.");
+        return;
+    }
+
     FGuid AllocationGuid;
     FGuid MatchGuid;
     if (!FGuid::Parse(AllocationId, AllocationGuid)
         || !FGuid::Parse(MatchId, MatchGuid)
+        || ConnectToken.Len() > 256
         || ConnectToken.Len() < 24
         || !IsSafeAdmissionOption(ConnectToken)
         || !IsSafeAdmissionOption(TargetServerId)
@@ -182,6 +192,8 @@ FString ASPProtocolGameMode::InitNewPlayer(
     Pending.AllocationId = AllocationId;
     Pending.MatchId = MatchId;
     Pending.ConnectToken = ConnectToken;
+    Pending.RequestId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphens);
+    Pending.ReconnectGrantId = UGameplayStatics::ParseOption(Options, TEXT("spReconnectGrantId"));
     Pending.DeadlineRealSeconds = FPlatformTime::Seconds() + FMath::Max(3.0f, PendingAdmissionTimeoutSeconds);
     PendingAdmissions.Add(AllocationId, MoveTemp(Pending));
     return FString();
@@ -342,10 +354,19 @@ void ASPProtocolGameMode::PostLogin(APlayerController* NewPlayer)
         PS->AuthenticatedSessionId.Reset();
         PS->AuthenticatedUserId.Reset();
 
+        const auto* CurrentState = GetGameState<ASPProtocolGameState>();
+        if (!CurrentState || (!Pending->ReconnectGrantId.IsEmpty()
+            && (CurrentState->bMatchComplete || CurrentState->MatchPhase != ESPMatchPhase::Planning
+                || CurrentState->RoundState != ESPRoundState::Waiting)))
+        {
+            RejectPendingAdmission(AllocationId, TEXT("Reconnect is only available in the ready room."));
+            return;
+        }
         Pending->bRequestStarted = true;
         const FString ConnectToken = Pending->ConnectToken;
         Pending->ConnectToken.Reset();
-        Backend->AdmitConnection(Pending->AllocationId, Pending->MatchId, ConnectToken);
+        Backend->AdmitConnection(Pending->AllocationId, Pending->MatchId, ConnectToken,
+            Pending->RequestId, Pending->ReconnectGrantId, GetGameState<ASPProtocolGameState>()->RoundNumber);
         return;
     }
 
@@ -414,7 +435,7 @@ bool ASPProtocolGameMode::FindPendingAdmissionForController(APlayerController* P
 void ASPProtocolGameMode::HandleBackendAdmissionCompleted(FSPDedicatedServerAdmission Admission)
 {
     FSPPendingPlayerAdmission* Pending = PendingAdmissions.Find(Admission.AllocationId);
-    if (!Pending || Pending->MatchId != Admission.MatchId)
+    if (!Pending || Pending->MatchId != Admission.MatchId || Pending->RequestId != Admission.RequestId)
     {
         return;
     }
@@ -432,7 +453,8 @@ void ASPProtocolGameMode::HandleBackendAdmissionCompleted(FSPDedicatedServerAdmi
 void ASPProtocolGameMode::PromoteAdmittedPlayer(APlayerController* PlayerController, const FSPDedicatedServerAdmission& Admission)
 {
     FSPPendingPlayerAdmission* Pending = PendingAdmissions.Find(Admission.AllocationId);
-    if (!Pending || Pending->Controller.Get() != PlayerController || Pending->MatchId != Admission.MatchId)
+    if (!Pending || Pending->Controller.Get() != PlayerController || Pending->MatchId != Admission.MatchId
+        || Pending->RequestId != Admission.RequestId || Pending->ReconnectGrantId != Admission.ReconnectGrantId)
     {
         return;
     }
@@ -454,23 +476,59 @@ void ASPProtocolGameMode::PromoteAdmittedPlayer(APlayerController* PlayerControl
         return;
     }
 
+    auto* GS = GetGameState<ASPProtocolGameState>();
+    for (APlayerState* BasePS : GameState->PlayerArray)
+    {
+        const auto* Existing = Cast<ASPPlayerState>(BasePS);
+        if (Existing && Existing != PS && Existing->bSessionAuthenticated
+            && Existing->AuthenticatedUserId == Admission.UserId)
+        {
+            RejectPendingAdmission(Admission.AllocationId, TEXT("Player is already connected."));
+            return;
+        }
+    }
+    const FSPCompetitivePlayerSlot* Reserved = nullptr;
+    if (!Admission.ReconnectGrantId.IsEmpty())
+    {
+        const FString* ReservedMatch = AdmittedPlayerMatches.Find(Admission.UserId);
+        // Until pawn/life-state recovery exists, reconnect is restricted to the ready room.
+        if (ReservedMatch && *ReservedMatch == Admission.MatchId
+            && GS && !GS->bMatchComplete && GS->RoundNumber == Admission.RoundNumber
+            && GS->MatchPhase == ESPMatchPhase::Planning && GS->RoundState == ESPRoundState::Waiting)
+            for (const FSPCompetitivePlayerSlot& Slot : GS->PlayerSlots)
+            {
+                const float* Deadline = ReconnectDeadlines.Find(Slot.PlayerId);
+                if (Slot.SessionId == Admission.UserId && Slot.SlotIndex == Admission.SlotIndex
+                    && Slot.ConnectionState == ESPConnectionState::Reconnecting
+                    && Deadline && *Deadline > GetWorld()->GetTimeSeconds()) { Reserved = &Slot; break; }
+            }
+        if (!Reserved)
+        {
+            RejectPendingAdmission(Admission.AllocationId, TEXT("Local reconnect reservation is no longer valid."));
+            return;
+        }
+        PS->Team = Reserved->Team;
+        PS->SelectedSpawnGroup = Reserved->SpawnGroup;
+        ReconnectDeadlines.Remove(Reserved->PlayerId);
+    }
     PendingAdmissions.Remove(Admission.AllocationId);
 
+    AdmittedPlayerMatches.Add(Admission.UserId, Admission.MatchId);
     PS->AuthenticatedUserId = Admission.UserId;
     PS->AuthenticatedSessionId = Admission.UserId;
     PS->bSessionAuthenticated = true;
     PS->ConnectionState = ESPConnectionState::Connected;
     PS->bReady = false;
-    AssignCompetitiveTeam(PS);
+    if (!Reserved) AssignCompetitiveTeam(PS);
     RefreshCompetitiveSlots();
 
     Super::HandleStartingNewPlayer_Implementation(PlayerController);
 }
 
-void ASPProtocolGameMode::HandleBackendAdmissionFailed(FString AllocationId, FString MatchId, FString ErrorMessage)
+void ASPProtocolGameMode::HandleBackendAdmissionFailed(FString AllocationId, FString MatchId, FString RequestId, FString ErrorMessage)
 {
     const FSPPendingPlayerAdmission* Pending = PendingAdmissions.Find(AllocationId);
-    if (!Pending || Pending->MatchId != MatchId)
+    if (!Pending || Pending->MatchId != MatchId || Pending->RequestId != RequestId)
     {
         return;
     }
@@ -644,6 +702,10 @@ bool ASPProtocolGameMode::CanStartCompetitiveMatch() const
 void ASPProtocolGameMode::RefreshCompetitiveSlots()
 {
     auto* GS=GetGameState<ASPProtocolGameState>(); if(!GS) return;
+    TArray<FSPCompetitivePlayerSlot> Previous = GS->PlayerSlots;
+    Previous.RemoveAll([](const FSPCompetitivePlayerSlot& Slot) { return Slot.ConnectionState == ESPConnectionState::Disconnected; });
+    TSet<int32> Occupied;
+    for (const auto& Slot : Previous) Occupied.Add(Slot.SlotIndex);
     TArray<FSPCompetitivePlayerSlot> Reserved;
     for(const FSPCompetitivePlayerSlot& Existing:GS->PlayerSlots)
         if(Existing.ConnectionState==ESPConnectionState::Reconnecting) Reserved.Add(Existing);
@@ -654,7 +716,19 @@ void ASPProtocolGameMode::RefreshCompetitiveSlots()
         auto* PS=Cast<ASPPlayerState>(BasePS); if(!PS || Index>=ExpectedCompetitivePlayers) continue;
         if (bRequireAuthenticatedSessions && !PS->bSessionAuthenticated) continue;
         FSPCompetitivePlayerSlot Slot;
-        Slot.SlotIndex=Index++;
+        const FString Identity = !PS->AuthenticatedUserId.IsEmpty() ? PS->AuthenticatedUserId : PS->AuthenticatedSessionId;
+        const auto* ExistingSlot = Previous.FindByPredicate([&](const FSPCompetitivePlayerSlot& Old)
+            { return !Identity.IsEmpty() ? Old.SessionId == Identity : Old.PlayerId == PS->GetPlayerId(); });
+        if (ExistingSlot) Slot.SlotIndex = ExistingSlot->SlotIndex;
+        else
+        {
+            int32 FreeIndex = 0;
+            while (Occupied.Contains(FreeIndex)) ++FreeIndex;
+            if (FreeIndex >= ExpectedCompetitivePlayers) continue;
+            Slot.SlotIndex = FreeIndex;
+            Occupied.Add(FreeIndex);
+        }
+        ++Index;
         Slot.PlayerId=PS->GetPlayerId();
         Slot.Team=PS->Team;
         Slot.SpawnGroup=PS->SelectedSpawnGroup;
@@ -671,7 +745,7 @@ void ASPProtocolGameMode::RefreshCompetitiveSlots()
         bool bReclaimed=false;
         for(const FSPCompetitivePlayerSlot& Live:GS->PlayerSlots) if(!Slot.SessionId.IsEmpty() && Live.SessionId==Slot.SessionId){bReclaimed=true;break;}
         if(bReclaimed) continue;
-        Slot.SlotIndex=Index++;Slot.bReady=false;GS->PlayerSlots.Add(Slot);
+        ++Index;Slot.bReady=false;GS->PlayerSlots.Add(Slot);
     }
     GS->ReadyPlayerCount=Ready;
     GS->bAllPlayersReady=Ready>=ExpectedCompetitivePlayers && GS->PlayerSlots.Num()>=ExpectedCompetitivePlayers;

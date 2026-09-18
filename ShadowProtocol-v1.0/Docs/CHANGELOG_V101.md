@@ -233,3 +233,10 @@ See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flo
 - Enforce reconnecting state on redemption and keep restored players unready.
 - Add real PostgreSQL race, replay, expiry and closed-match/allocation regression cases.
 - Fresh Unreal admission credentials and packaged reconnect remain pending.
+
+## Planned ready-room reconnect admission
+
+- Exchange a reconnect reservation for a fresh single-use transport credential with the original deadline.
+- Route Unreal ClientTravel through node-bound admission; correlate asynchronous attempts, restore local reserved team/spawn and preserve roster indices.
+- Add migration and PostgreSQL race/replay/expiry/capacity checks.
+- Mid-round life-state recovery, automatic backend slot publication and UE runtime verification remain pending; see RECONNECT_RESERVATIONS_V101.md.

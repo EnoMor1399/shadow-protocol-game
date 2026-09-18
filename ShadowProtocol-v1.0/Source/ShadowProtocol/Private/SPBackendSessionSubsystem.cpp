@@ -518,6 +518,15 @@ void USPBackendSessionSubsystem::HandleAllocationResponse(FHttpRequestPtr Reques
     JsonObject->TryGetStringField(TEXT("networkBuild"), Allocation.NetworkBuild);
     JsonObject->TryGetStringField(TEXT("backendProtocol"), Allocation.BackendProtocol);
 
+    JsonObject->TryGetStringField(TEXT("reconnectGrantId"), Allocation.ReconnectGrantId);
+    FGuid ReconnectGuid;
+    if (Request->GetURL().EndsWith(TEXT("/reconnect-allocation"))
+        && !FGuid::Parse(Allocation.ReconnectGrantId, ReconnectGuid))
+    {
+        OnRequestFailed.Broadcast(TEXT("reconnect-allocation"), TEXT("Missing reconnect admission grant."));
+        return;
+    }
+
     double TickRate = 0.0;
     if (JsonObject->TryGetNumberField(TEXT("tickRate"), TickRate))
     {
@@ -556,6 +565,10 @@ FString USPBackendSessionSubsystem::BuildAllocationTravelUrl(const FSPMatchAlloc
 {
     FGuid AllocationGuid;
     FGuid MatchGuid;
+    FGuid ReconnectGuid;
+    if (!Allocation.ReconnectGrantId.IsEmpty()
+        && (!FGuid::Parse(Allocation.ReconnectGrantId, ReconnectGuid)
+            || Allocation.ReconnectGrantId != ReconnectGuid.ToString(EGuidFormats::DigitsWithHyphens))) return FString();
     FDateTime AllocationExpiry;
     const FTCHARToUTF8 HostUtf8(*Allocation.ConnectHost);
     if (!SPTravelValidation::IsValidHost(std::string_view(HostUtf8.Get(), HostUtf8.Length()))
@@ -599,7 +612,7 @@ FString USPBackendSessionSubsystem::BuildAllocationTravelUrl(const FSPMatchAlloc
         Host = TEXT("[") + Host + TEXT("]");
     }
 
-    return FString::Printf(
+    FString TravelUrl = FString::Printf(
         TEXT("%s:%d?spAllocationId=%s?spMatchId=%s?spConnectToken=%s?spServerId=%s?spNetworkBuild=%s"),
         *Host,
         Allocation.ConnectPort,
@@ -608,6 +621,8 @@ FString USPBackendSessionSubsystem::BuildAllocationTravelUrl(const FSPMatchAlloc
         *Allocation.ConnectToken,
         *Allocation.ServerId,
         *Allocation.NetworkBuild);
+    if (!Allocation.ReconnectGrantId.IsEmpty()) TravelUrl += TEXT("?spReconnectGrantId=") + Allocation.ReconnectGrantId;
+    return TravelUrl;
 }
 
 bool USPBackendSessionSubsystem::ConnectToAllocation(APlayerController* PlayerController, const FSPMatchAllocation& Allocation)
@@ -715,6 +730,36 @@ void USPBackendSessionSubsystem::HandleReconnectTicketResponse(FHttpRequestPtr R
     }
 
     OnReconnectTicketIssued.Broadcast(ReconnectToken, ReconnectDeadline, FMath::RoundToInt(GraceSeconds));
+}
+
+void USPBackendSessionSubsystem::RequestReconnectAllocation(const FString& MatchId, int32 RoundNumber, int32 SlotIndex, const FString& ReconnectToken)
+{
+    if (!CanUseAuthenticatedMatchEndpoint(TEXT("reconnect-allocation")))
+    {
+        return;
+    }
+
+    if (MatchId.IsEmpty() || RoundNumber < 1 || RoundNumber > 9 || SlotIndex < 0 || SlotIndex > 9 || ReconnectToken.IsEmpty())
+    {
+        OnRequestFailed.Broadcast(TEXT("reconnect-allocation"), TEXT("Reconnect request contains invalid match, round, slot or token data."));
+        return;
+    }
+
+    const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+    Payload->SetStringField(TEXT("matchId"), MatchId);
+    Payload->SetNumberField(TEXT("roundNumber"), RoundNumber);
+    Payload->SetNumberField(TEXT("slotIndex"), SlotIndex);
+    Payload->SetStringField(TEXT("reconnectToken"), ReconnectToken);
+
+    const TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = CreateAuthenticatedJsonRequest(TEXT("/v1/matches/reconnect-allocation"), TEXT("POST"));
+    Request->SetContentAsString(SerializeJson(Payload));
+    Request->OnProcessRequestComplete().BindUObject(this, &USPBackendSessionSubsystem::HandleAllocationResponse);
+
+    if (!Request->ProcessRequest())
+    {
+        ActiveAuthenticatedRequests.Remove(Request);
+        OnRequestFailed.Broadcast(TEXT("reconnect-allocation"), TEXT("Unable to start reconnect request."));
+    }
 }
 
 void USPBackendSessionSubsystem::ReconnectToReservedSlot(const FString& MatchId, int32 RoundNumber, int32 SlotIndex, const FString& ReconnectToken)

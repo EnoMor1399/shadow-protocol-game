@@ -55,3 +55,7 @@ UE 5.6/UHT and packaged runtime validation remain required. Test expired allocat
 before/after UI delay, invalid host input, IPv4/IPv6 server travel, connection loss,
 travel rejection, multiple PIE worlds, and teardown with callbacks pending. Check
 that errors never display connect tokens and never trigger automatic token replay.
+
+Fresh admission is now available for planned ready-room reconnect through
+`RequestReconnectAllocation` and `ConnectToAllocation`; see
+`RECONNECT_RESERVATIONS_V101.md` for prerequisites and remaining runtime gates.

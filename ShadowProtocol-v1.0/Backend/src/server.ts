@@ -1,3 +1,4 @@
+import { exchangeReconnect, admitReconnect } from './reconnect-admission.js';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
@@ -414,11 +415,16 @@ app.post('/v1/matches/allocate',async(req,reply)=>{
   return reply.code(201).send({allocationId,matchId,serverId,region:parsed.data.region,tickRate:60,connectToken,connectHost:connectTarget.host,connectPort:connectTarget.port,expiresAt:new Date(expiresAt).toISOString(),networkBuild:session.build,backendProtocol:BACKEND_PROTOCOL_VERSION,allocator:'static-dev'});
 });
 
-const admissionSchema=z.object({allocationId:z.string().uuid(),matchId:z.string().uuid(),connectToken:z.string().min(24).max(256)});
+const admissionSchema=z.object({allocationId:z.string().uuid(),matchId:z.string().uuid(),connectToken:z.string().min(24).max(256),reconnectGrantId:z.string().uuid().optional(),roundNumber:z.number().int().min(1).max(9).optional()});
 app.post('/v1/matches/admit',async(req,reply)=>{
   if(!(await requireMatchServer(req,reply)))return;
   const parsed=admissionSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(!pool)return reply.code(503).send({error:'database-not-configured'});
+  if(parsed.data.reconnectGrantId){
+    const admitted=await admitReconnect(pool,parsed.data,String(req.headers['x-sp-server-id']??''));
+    if(!admitted)return reply.code(403).send({error:'reconnect-admission-denied'});
+    return reply.send({...admitted,backendProtocol:BACKEND_PROTOCOL_VERSION});
+  }
   const tokenHash=sha256(parsed.data.connectToken);
   const r=await pool.query(`update server_allocations sa
     set status='live',started_at=coalesce(sa.started_at,now()),connect_token_consumed_at=now()
@@ -607,6 +613,15 @@ app.post('/v1/matches/reconnect-ticket',async(req,reply)=>{
 });
 
 const reconnectSchema=z.object({matchId:z.string().uuid(),roundNumber:z.number().int().min(1).max(9),slotIndex:z.number().int().min(0).max(9),reconnectToken:z.string().min(32).max(256)});
+app.post('/v1/matches/reconnect-allocation',async(req,reply)=>{
+  const session=requireCompatibleSession(req,reply);if(!session)return;
+  const parsed=reconnectSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
+  if(!pool)return reply.code(503).send({error:'database-not-configured'});
+  const allocation=await exchangeReconnect(pool,parsed.data,session);
+  if(!allocation)return reply.code(403).send({error:'reconnect-allocation-denied'});
+  return reply.code(201).send({...allocation,backendProtocol:BACKEND_PROTOCOL_VERSION});
+});
+
 app.post('/v1/matches/reconnect',async(req,reply)=>{
   const session=requireCompatibleSession(req,reply);if(!session)return;
   const parsed=reconnectSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});

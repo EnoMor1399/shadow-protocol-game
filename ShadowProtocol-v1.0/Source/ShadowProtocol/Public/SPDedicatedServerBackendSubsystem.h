@@ -53,6 +53,19 @@ struct FSPDedicatedServerAdmission
     UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
     bool bAdmitted = false;
 
+    // Local request identity prevents delayed callbacks from promoting a newer attempt.
+    UPROPERTY()
+    FString RequestId;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    FString ReconnectGrantId;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    int32 RoundNumber = 0;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    int32 SlotIndex = INDEX_NONE;
+
     UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
     FString AllocationId;
 
@@ -78,7 +91,7 @@ struct FSPDedicatedServerAdmission
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPDedicatedServerRegistered, FSPDedicatedServerRegistration, Registration);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FSPDedicatedServerHeartbeat, FString, ServerId, FString, Status, int32, ActiveAllocations);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPDedicatedServerAdmissionCompleted, FSPDedicatedServerAdmission, Admission);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FSPDedicatedServerAdmissionFailed, FString, AllocationId, FString, MatchId, FString, ErrorMessage);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FSPDedicatedServerAdmissionFailed, FString, AllocationId, FString, MatchId, FString, RequestId, FString, ErrorMessage);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FSPDedicatedServerAllocationReleased, FString, AllocationId, FString, MatchId, FString, Status, int32, ActiveAllocations);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPDedicatedServerDrainChanged, bool, bDraining);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPDedicatedServerCredentialRotated, FString, CredentialExpiresAt);
@@ -143,7 +156,7 @@ public:
     void MarkDraining();
 
     UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Dedicated Server")
-    void AdmitConnection(const FString& AllocationId, const FString& MatchId, const FString& ConnectToken);
+    void AdmitConnection(const FString& AllocationId, const FString& MatchId, const FString& ConnectToken, const FString& RequestId, const FString& ReconnectGrantId, int32 RoundNumber);
 
     UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Dedicated Server")
     void ReleaseAllocation(const FString& AllocationId, const FString& MatchId, bool bFailed = false);
@@ -200,7 +213,7 @@ private:
     void HandleHeartbeatResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void HandleCredentialRotationResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void HandleDrainResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
-    void HandleAdmissionResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, FString AllocationId, FString MatchId);
+    void HandleAdmissionResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, FString AllocationId, FString MatchId, FString RequestId, FString ReconnectGrantId);
     void HandleReleaseResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void BroadcastHttpFailure(const FString& Context, FHttpResponsePtr Response, bool bWasSuccessful);
 };

@@ -515,11 +515,12 @@ void USPDedicatedServerBackendSubsystem::HandleDrainResponse(FHttpRequestPtr, FH
     OnDrainChanged.Broadcast(true);
 }
 
-void USPDedicatedServerBackendSubsystem::AdmitConnection(const FString& AllocationId, const FString& MatchId, const FString& ConnectToken)
+void USPDedicatedServerBackendSubsystem::AdmitConnection(const FString& AllocationId, const FString& MatchId, const FString& ConnectToken, const FString& RequestId, const FString& ReconnectGrantId, int32 RoundNumber)
 {
     if (!bConfigured || !bRegistered || bDraining || AllocationId.IsEmpty() || MatchId.IsEmpty() || ConnectToken.IsEmpty())
     {
         OnRequestFailed.Broadcast(TEXT("connection-admission"), TEXT("Dedicated server is not ready for connection admission or admission data is incomplete."));
+        OnAdmissionFailed.Broadcast(AllocationId, MatchId, RequestId, TEXT("Admission service unavailable."));
         return;
     }
 
@@ -527,6 +528,11 @@ void USPDedicatedServerBackendSubsystem::AdmitConnection(const FString& Allocati
     Payload->SetStringField(TEXT("allocationId"), AllocationId);
     Payload->SetStringField(TEXT("matchId"), MatchId);
     Payload->SetStringField(TEXT("connectToken"), ConnectToken);
+    if (!ReconnectGrantId.IsEmpty())
+    {
+        Payload->SetStringField(TEXT("reconnectGrantId"), ReconnectGrantId);
+        Payload->SetNumberField(TEXT("roundNumber"), RoundNumber);
+    }
 
     const TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = CreateInfrastructureJsonRequest(TEXT("/v1/matches/admit"), TEXT("POST"));
     Request->SetContentAsString(SerializeJson(Payload));
@@ -534,13 +540,13 @@ void USPDedicatedServerBackendSubsystem::AdmitConnection(const FString& Allocati
         this,
         &USPDedicatedServerBackendSubsystem::HandleAdmissionResponse,
         AllocationId,
-        MatchId);
+        MatchId, RequestId, ReconnectGrantId);
 
     if (!Request->ProcessRequest())
     {
         const FString Error = TEXT("Unable to start dedicated-server admission request.");
         OnRequestFailed.Broadcast(TEXT("connection-admission"), Error);
-        OnAdmissionFailed.Broadcast(AllocationId, MatchId, Error);
+        OnAdmissionFailed.Broadcast(AllocationId, MatchId, RequestId, Error);
     }
 }
 
@@ -549,7 +555,7 @@ void USPDedicatedServerBackendSubsystem::HandleAdmissionResponse(
     FHttpResponsePtr Response,
     bool bWasSuccessful,
     FString AllocationId,
-    FString MatchId)
+    FString MatchId, FString RequestId, FString ReconnectGrantId)
 {
     if (!bWasSuccessful || !Response.IsValid() || Response->GetResponseCode() < 200 || Response->GetResponseCode() >= 300)
     {
@@ -568,7 +574,7 @@ void USPDedicatedServerBackendSubsystem::HandleAdmissionResponse(
             }
         }
         BroadcastHttpFailure(TEXT("connection-admission"), Response, bWasSuccessful);
-        OnAdmissionFailed.Broadcast(AllocationId, MatchId, Error);
+        OnAdmissionFailed.Broadcast(AllocationId, MatchId, RequestId, Error);
         return;
     }
 
@@ -577,11 +583,15 @@ void USPDedicatedServerBackendSubsystem::HandleAdmissionResponse(
     {
         const FString Error = TEXT("Backend returned invalid admission JSON.");
         OnRequestFailed.Broadcast(TEXT("connection-admission"), Error);
-        OnAdmissionFailed.Broadcast(AllocationId, MatchId, Error);
+        OnAdmissionFailed.Broadcast(AllocationId, MatchId, RequestId, Error);
         return;
     }
 
     FSPDedicatedServerAdmission Admission;
+    Admission.RequestId = RequestId;
+    JsonObject->TryGetStringField(TEXT("reconnectGrantId"), Admission.ReconnectGrantId);
+    JsonObject->TryGetNumberField(TEXT("roundNumber"), Admission.RoundNumber);
+    JsonObject->TryGetNumberField(TEXT("slotIndex"), Admission.SlotIndex);
     JsonObject->TryGetBoolField(TEXT("admitted"), Admission.bAdmitted);
     JsonObject->TryGetStringField(TEXT("allocationId"), Admission.AllocationId);
     JsonObject->TryGetStringField(TEXT("matchId"), Admission.MatchId);
@@ -591,7 +601,8 @@ void USPDedicatedServerBackendSubsystem::HandleAdmissionResponse(
     JsonObject->TryGetStringField(TEXT("networkBuild"), Admission.NetworkBuild);
     JsonObject->TryGetStringField(TEXT("backendProtocol"), Admission.BackendProtocol);
 
-    if (!Admission.bAdmitted
+    if (Admission.ReconnectGrantId != ReconnectGrantId
+        || !Admission.bAdmitted
         || Admission.AllocationId != AllocationId
         || Admission.MatchId != MatchId
         || Admission.ServerId != ServerId
@@ -599,7 +610,7 @@ void USPDedicatedServerBackendSubsystem::HandleAdmissionResponse(
     {
         const FString Error = TEXT("Admission response did not match the pending allocation, match, dedicated server or network build.");
         OnRequestFailed.Broadcast(TEXT("connection-admission"), Error);
-        OnAdmissionFailed.Broadcast(AllocationId, MatchId, Error);
+        OnAdmissionFailed.Broadcast(AllocationId, MatchId, RequestId, Error);
         return;
     }
 

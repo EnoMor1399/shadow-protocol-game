@@ -18,6 +18,8 @@ struct FSPPendingPlayerAdmission
     FString AllocationId;
     FString MatchId;
     FString ConnectToken;
+    FString RequestId;
+    FString ReconnectGrantId;
     double DeadlineRealSeconds = 0.0;
     bool bRequestStarted = false;
 };
@@ -91,9 +93,10 @@ protected:
     void DisconnectPlayer(APlayerController* PlayerController, const FString& Reason);
     void UpdatePendingAdmissions();
     UFUNCTION() void HandleBackendAdmissionCompleted(FSPDedicatedServerAdmission Admission);
-    UFUNCTION() void HandleBackendAdmissionFailed(FString AllocationId, FString MatchId, FString ErrorMessage);
+    UFUNCTION() void HandleBackendAdmissionFailed(FString AllocationId, FString MatchId, FString RequestId, FString ErrorMessage);
 
     TMap<FString,FSPPendingPlayerAdmission> PendingAdmissions;
     TMap<int32,float> ReconnectDeadlines;
+    TMap<FString,FString> AdmittedPlayerMatches;
     TMap<TWeakObjectPtr<ASPCharacter>,TMap<TWeakObjectPtr<ASPPlayerState>,float>> DamageLedger;
 };

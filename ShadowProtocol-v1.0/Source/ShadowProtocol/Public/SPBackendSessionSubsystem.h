@@ -60,6 +60,9 @@ struct FSPMatchAllocation
     FString ConnectToken;
 
     UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
+    FString ReconnectGrantId;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
     FString ConnectHost;
 
     UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
@@ -201,6 +204,10 @@ public:
 
     UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
     void RequestReconnectTicket(const FString& MatchId, int32 RoundNumber, int32 SlotIndex);
+
+    // Emits OnAllocationCompleted; pass that allocation to ConnectToAllocation.
+    UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
+    void RequestReconnectAllocation(const FString& MatchId, int32 RoundNumber, int32 SlotIndex, const FString& ReconnectToken);
 
     UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
     void ReconnectToReservedSlot(const FString& MatchId, int32 RoundNumber, int32 SlotIndex, const FString& ReconnectToken);

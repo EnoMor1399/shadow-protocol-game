@@ -48,7 +48,7 @@ test('Protocol GameMode gates spawn and competitive slots until backend admissio
   assert.match(gameModeCpp, /ASPProtocolGameMode::InitNewPlayer/);
   assert.match(gameModeCpp, /ASPProtocolGameMode::HandleStartingNewPlayer_Implementation/);
   assert.match(gameModeCpp, /FindPendingAdmissionForController\(NewPlayer/);
-  assert.match(gameModeCpp, /Backend->AdmitConnection\(Pending->AllocationId,\s*Pending->MatchId,\s*ConnectToken\)/);
+  assert.match(gameModeCpp, /Backend->AdmitConnection\(Pending->AllocationId,\s*Pending->MatchId,\s*ConnectToken,\s*Pending->RequestId,\s*Pending->ReconnectGrantId,\s*GetGameState<ASPProtocolGameState>\(\)->RoundNumber\)/);
   assert.match(gameModeCpp, /Pending->ConnectToken\.Reset\(\)/);
   assert.match(gameModeCpp, /HandleBackendAdmissionCompleted/);
   assert.match(gameModeCpp, /HandleBackendAdmissionFailed/);
@@ -202,4 +202,22 @@ test('engine failure reporting is scoped and does not forward raw token-bearing 
   assert.doesNotMatch(handlers, /const FString&\s+\w+/);
   assert.match(handlers, /ReportConnectionFailure\(TEXT\("network"\)/);
   assert.match(handlers, /ReportConnectionFailure\(TEXT\("travel"\)/);
+});
+
+test('reconnect travel and promotion require a fresh grant and matching local reservation', async () => {
+  const client = await source('../../Source/ShadowProtocol/Private/SPBackendSessionSubsystem.cpp');
+  const mode = await source('../../Source/ShadowProtocol/Private/SPProtocolGameMode.cpp');
+  const server = await source('../../Source/ShadowProtocol/Private/SPDedicatedServerBackendSubsystem.cpp');
+  assert.match(client, /RequestReconnectAllocation/);
+  assert.match(client, /\/v1\/matches\/reconnect-allocation/);
+  assert.match(client, /spReconnectGrantId=/);
+  assert.match(server, /Admission.RequestId = RequestId/);
+  assert.match(server, /Admission.ReconnectGrantId != ReconnectGrantId/);
+  assert.match(mode, /Pending->RequestId != Admission.RequestId/);
+  assert.match(mode, /Pending->RequestId != RequestId/);
+  const promote = mode.split('void ASPProtocolGameMode::PromoteAdmittedPlayer')[1].split('void ASPProtocolGameMode::HandleBackendAdmissionFailed')[0];
+  for (const guard of ['ReservedMatch', 'Admission.RoundNumber', 'Admission.SlotIndex', 'ESPMatchPhase::Planning', 'ESPConnectionState::Reconnecting', 'Deadline']) assert.ok(promote.includes(guard));
+  assert.match(promote, /PS->Team = Reserved->Team/);
+  assert.match(promote, /PS->SelectedSpawnGroup = Reserved->SpawnGroup/);
+  assert.match(promote, /PS->bReady = false/);
 });

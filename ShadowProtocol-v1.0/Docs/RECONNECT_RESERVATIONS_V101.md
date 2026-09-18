@@ -17,16 +17,48 @@ The APIs return generic 403 denial for ineligible reservations without exposing
 whether another user's slot exists. Issuance now uses `reconnect-reservation-denied`
 for this condition. Callers must treat non-2xx responses as failure.
 
-This is a prerequisite for the fresh Unreal admission-token exchange, not that
-exchange itself. `/v1/matches/reconnect` still restores database slot state only.
-It must not be described as successful packaged-client reconnection. Server-side
-slot publication/restoration, fresh transport admission, round binding and runtime
-tests remain necessary. The current ticket must be obtained while connected;
-unexpected disconnection recovery still needs server-issued reservation support.
-If the winning issuance response is lost, the client cannot recover the plaintext
-token or renew the reservation; trusted server reconciliation is required.
+## Fresh transport admission
 
-Integration coverage executes real PostgreSQL updates and HTTP calls: four-way
-issuance races, unchanged credentials/deadlines on repeat, wrong-region and ended
-match denial without token consumption, four-way redemption races, replay, expiry,
-renewal denial and released-allocation denial. No schema migration is required.
+Run `npm run db:upgrade:v101` before deploying this change (fresh installs use
+`db:init`). The idempotent `v101_reconnect_admission.sql` adds a grant UUID and
+hashed transport credential to the reserved slot.
+
+For a planned ready-room disconnect, obtain a ticket while connected. After
+leaving the server, call `RequestReconnectAllocation(matchId, round, slot, ticket)`.
+Its `/v1/matches/reconnect-allocation` request atomically exchanges the ticket for
+a fresh connect token and grant UUID, leaving the slot reconnecting. The original
+90-second deadline is preserved. Concurrent exchange has one winner. The response
+uses the existing live allocation and endpoint; capacity is not incremented.
+
+Pass `OnAllocationCompleted` to `ConnectToAllocation`. The validated travel URL
+adds `spReconnectGrantId`. GameMode submits the grant and its own current round
+using node-authenticated `/v1/matches/admit`. The backend atomically consumes the
+transport credential and restores the slot unready. It checks the owning live
+allocation, node identity, unfinished match, user, round, grant, hash and deadline.
+A wrong node, stale round, expired credential or replay cannot restore the slot.
+
+GameMode correlates both admission success and failure with a unique local request
+ID so a delayed response cannot affect a newer attempt. Promotion also requires
+an unexpired local reservation for the same backend user, match and slot, no live
+duplicate identity, and the ready-room phase. It restores the server's reserved
+team and spawn selection, preserves roster indices and clears readiness.
+
+## Scope and remaining integration
+
+This is source-level **planned ready-room reconnect**, not full mid-round recovery.
+The authoritative slot must already be published to the backend with matching
+round/index; automatic GameMode slot publication and account/session bootstrap
+remain pending. Unexpected disconnects still need server-issued reservations.
+Mid-round reconnect is denied until pawn, health and elimination state can be
+restored without granting an extra life. A server restart loses local reservations.
+
+The legacy `/v1/matches/reconnect` endpoint remains database-only. Do not call it
+before transport exchange: it consumes the reservation without issuing admission.
+If an exchange/admission response is lost or GameMode rejects promotion after
+backend redemption, fail closed; no automatic retry/credential renewal is provided.
+Trusted server reconciliation is still needed for this failure case.
+
+PostgreSQL integration tests cover concurrent ticket issuance/exchange/admission,
+wrong tokens, node and round, expiry, ended matches, replay, credential clearing
+and unchanged capacity. Unreal source checks are not compilation or runtime tests.
+UE5.6/UHT and packaged server/client ready-room reconnect still require validation.
