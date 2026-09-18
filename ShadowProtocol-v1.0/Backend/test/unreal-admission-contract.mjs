@@ -97,3 +97,45 @@ test('late admissions cannot bypass timeout, provider loss or dedicated identity
   assert.match(mode, /if\(IsDedicatedAdmissionRequired\(\) \|\| !Player \|\| SessionId.Len\(\)<8\) return false/);
   assert.match(mode, /if \(GameSession && GameSession->KickPlayer\(PlayerController, ReasonText\)\) return/);
 });
+
+test('ready-room RPCs derive identity from their owning controller', async () => {
+  const header = await source('../../Source/ShadowProtocol/Public/SPObserverPlayerController.h');
+  const controller = await source('../../Source/ShadowProtocol/Private/SPObserverPlayerController.cpp');
+  assert.match(header, /UFUNCTION\(Server, Reliable\) void ServerSetReadyState\(bool bReady\)/);
+  assert.match(header, /UFUNCTION\(Server, Reliable\) void ServerSelectSpawnGroup\(FName SpawnGroupId\)/);
+  assert.match(controller, /Mode->SetPlayerReady\(GetPlayerState<ASPPlayerState>\(\), bReady\)/);
+  assert.match(controller, /Mode->SelectSpawnGroup\(GetPlayerState<ASPPlayerState>\(\), SpawnGroupId\)/);
+  assert.match(controller, /Now < NextReadyRoomRequestSeconds/);
+  assert.equal((controller.match(/if \(!ConsumeReadyRoomRequest\(\)\) return;/g) || []).length, 2);
+  assert.doesNotMatch(header, /Server(?:SetReadyState|SelectSpawnGroup)\([^)]*(?:PlayerState|UserId|SessionId)/);
+});
+
+test('ready-room mutations are planning-only and require admitted connected players', async () => {
+  const mode = await source('../../Source/ShadowProtocol/Private/SPProtocolGameMode.cpp');
+  const gate = mode.split('bool ASPProtocolGameMode::CanEditReadyRoom(')[1].split('bool ASPProtocolGameMode::SetPlayerReady(')[0];
+  for (const guard of ['HasAuthority()', 'PlayerArray.Contains(Player)', 'bMatchComplete',
+    'ESPMatchPhase::Planning', 'ESPRoundState::Waiting', 'ESPConnectionState::Connected',
+    'ESPTeam::None', 'bSessionAuthenticated', 'Backend->IsDraining()', 'IsAcceptingAdmissions()'])
+    assert.ok(gate.includes(guard), `missing guard: ${guard}`);
+  const ready = mode.split('bool ASPProtocolGameMode::SetPlayerReady(')[1].split('bool ASPProtocolGameMode::SelectSpawnGroup(')[0];
+  assert.ok(ready.indexOf('CanEditReadyRoom(Player)') < ready.indexOf('Player->bReady=bReady'));
+  const spawn = mode.split('bool ASPProtocolGameMode::SelectSpawnGroup(')[1].split('bool ASPProtocolGameMode::CanStartCompetitiveMatch(')[0];
+  assert.match(spawn, /CanEditReadyRoom\(Player\)/);
+  assert.match(spawn, /Group.Team==Player->Team/);
+  assert.match(spawn, /Player->bReady=false/);
+  const preparation = mode.split('void ASPProtocolGameMode::BeginPreparation()')[1].split('void ASPProtocolGameMode::BeginDeployment()')[0];
+  assert.ok(preparation.indexOf('!CanStartCompetitiveMatch()') < preparation.indexOf('StartProtocolSession()'));
+});
+
+test('native ready-room UI consumes replicated state without granting local readiness', async () => {
+  const widget = await source('../../Source/ShadowProtocol/Private/SPReadyRoomWidget.cpp');
+  const controller = await source('../../Source/ShadowProtocol/Private/SPObserverPlayerController.cpp');
+  assert.match(widget, /Player->bSessionAuthenticated/);
+  assert.match(widget, /ReadyButton->SetIsEnabled\(bEditable\)/);
+  assert.match(widget, /Controller->RequestReadyState\(!Player->bReady\)/);
+  assert.doesNotMatch(widget, /Player->bReady\s*=/);
+  assert.match(controller, /IsLocalController\(\) && GetNetMode\(\) != NM_DedicatedServer/);
+  assert.match(controller, /FInputModeUIOnly/);
+  assert.match(controller, /FInputModeGameOnly/);
+  assert.match(controller, /ReadyRoomWidget->RemoveFromParent\(\)/);
+});

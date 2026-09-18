@@ -199,3 +199,12 @@ See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flo
 - Extend CI from three to six Unreal source-contract checks. See
   `ONLINE_GAME_SESSION_V101.md` for build commands and pending runtime gates.
 - UHT, UE compilation, Steam/EOS bootstrap and packaged 10-client validation remain pending.
+
+## Native ready-room continuation
+
+- Add local Ready/Cancel UMG controls showing replicated admission/team/spawn/readiness.
+- Add owner-controller ready and spawn RPCs with throttling and GameMode validation.
+- Restrict edits to admitted connected planning players; changed valid spawn choices clear readiness.
+- Recheck readiness during asynchronous OSS startup before preparation.
+- Extend Unreal source contracts to nine checks; UE/UHT and packaged runtime validation remain pending.
+- See `READY_ROOM_V101.md` for custom UMG hooks, test cases and remaining integration work.

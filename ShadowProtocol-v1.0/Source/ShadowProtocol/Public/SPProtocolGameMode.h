@@ -54,7 +54,7 @@ public:
     UFUNCTION(BlueprintCallable) void CompleteExtraction(ASPPlayerState* Player);
     void ApplyIntelligenceEffect(ESPIntelType Type, FName EffectTag, ASPPlayerState* Player);
     UFUNCTION(BlueprintCallable) void EvaluateEliminationWin();
-    UFUNCTION(BlueprintCallable) void SetPlayerReady(ASPPlayerState* Player, bool bReady);
+    UFUNCTION(BlueprintCallable) bool SetPlayerReady(ASPPlayerState* Player, bool bReady);
     UFUNCTION(BlueprintCallable) bool SelectSpawnGroup(ASPPlayerState* Player, FName SpawnGroupId);
     UFUNCTION(BlueprintPure) bool CanStartCompetitiveMatch() const;
     UFUNCTION(BlueprintCallable) bool AuthorizePlayerSession(ASPPlayerState* Player, const FString& SessionId);
@@ -81,6 +81,7 @@ protected:
     void SelectObjectiveSiteForRound();
     bool IsSpawnStartValid(const APlayerStart* Start, const ASPPlayerState* Player) const;
     void UpdateReconnectReservations();
+    bool CanEditReadyRoom(const ASPPlayerState* Player) const;
     bool IsDedicatedAdmissionRequired() const;
     USPDedicatedServerBackendSubsystem* GetDedicatedServerBackend() const;
     bool FindPendingAdmissionForController(APlayerController* PlayerController, FString& OutAllocationId) const;

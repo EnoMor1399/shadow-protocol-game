@@ -231,6 +231,10 @@ void ASPProtocolGameMode::ResetRoundState()
 
 void ASPProtocolGameMode::BeginPreparation()
 {
+    const auto* CurrentState = GetGameState<ASPProtocolGameState>();
+    if (!CurrentState || CurrentState->bMatchComplete) return;
+    // A player can withdraw readiness while asynchronous OSS start is pending.
+    if (CurrentState->MatchPhase == ESPMatchPhase::Planning && !CanStartCompetitiveMatch()) return;
     if (IsDedicatedAdmissionRequired())
     {
         auto* OnlineSession = Cast<ASPOnlineGameSession>(GameSession);
@@ -571,21 +575,48 @@ void ASPProtocolGameMode::Logout(AController* Exiting)
     Super::Logout(Exiting);
 }
 
-void ASPProtocolGameMode::SetPlayerReady(ASPPlayerState* Player,bool bReady)
+bool ASPProtocolGameMode::CanEditReadyRoom(const ASPPlayerState* Player) const
 {
-    if(!Player || !Player->HasAuthority()) return;
+    const auto* GS = GetGameState<ASPProtocolGameState>();
+    if (!HasAuthority() || !Player || !Player->HasAuthority() || Player->GetWorld() != GetWorld()
+        || !GS || !GS->PlayerArray.Contains(Player) || GS->bMatchComplete
+        || GS->MatchPhase != ESPMatchPhase::Planning || GS->RoundState != ESPRoundState::Waiting
+        || Player->ConnectionState != ESPConnectionState::Connected || Player->Team == ESPTeam::None)
+        return false;
+    if ((bRequireAuthenticatedSessions || IsDedicatedAdmissionRequired()) && !Player->bSessionAuthenticated)
+        return false;
+    if (IsDedicatedAdmissionRequired())
+    {
+        const auto* Backend = GetDedicatedServerBackend();
+        const auto* OnlineSession = Cast<ASPOnlineGameSession>(GameSession);
+        if (!Backend || !Backend->IsRegistered() || Backend->IsDraining()
+            || !OnlineSession || !OnlineSession->IsAcceptingAdmissions()) return false;
+    }
+    return true;
+}
+
+bool ASPProtocolGameMode::SetPlayerReady(ASPPlayerState* Player,bool bReady)
+{
+    if (!CanEditReadyRoom(Player)) return false;
     Player->bReady=bReady;
+    Player->ForceNetUpdate();
     RefreshCompetitiveSlots();
+    return true;
 }
 
 bool ASPProtocolGameMode::SelectSpawnGroup(ASPPlayerState* Player,FName SpawnGroupId)
 {
-    if(!Player || !Player->HasAuthority()) return false;
+    if (!CanEditReadyRoom(Player) || SpawnGroupId.IsNone()) return false;
     for(const FSPSpawnGroup& Group : SpawnGroups)
     {
         if(Group.GroupId==SpawnGroupId && (Group.Team==ESPTeam::None || Group.Team==Player->Team))
         {
-            Player->SelectedSpawnGroup=SpawnGroupId;
+            if (Player->SelectedSpawnGroup != SpawnGroupId)
+            {
+                Player->SelectedSpawnGroup=SpawnGroupId;
+                Player->bReady=false; // Changed deployment choices require confirmation.
+                Player->ForceNetUpdate();
+            }
             RefreshCompetitiveSlots();
             return true;
         }
@@ -644,6 +675,7 @@ void ASPProtocolGameMode::RefreshCompetitiveSlots()
     }
     GS->ReadyPlayerCount=Ready;
     GS->bAllPlayersReady=Ready>=ExpectedCompetitivePlayers && GS->PlayerSlots.Num()>=ExpectedCompetitivePlayers;
+    GS->ForceNetUpdate();
 }
 
 AActor* ASPProtocolGameMode::ChoosePlayerStart_Implementation(AController* Player)
