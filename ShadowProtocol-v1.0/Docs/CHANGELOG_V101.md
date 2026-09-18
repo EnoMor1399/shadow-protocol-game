@@ -172,3 +172,19 @@ See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flo
 - `game_server_nodes` records the last attestation id/time for audit.
 - Unreal dedicated-server bridge reads `SP_NODE_ATTESTATION` from process environment, sends it only during registration and clears it after successful consumption.
 - Attested authority recovery fails closed and requires fresh orchestrator launch material instead of replaying an old attestation.
+
+
+## Unreal pending-admission gate
+
+- Adds `USPBackendSessionSubsystem::BuildAllocationTravelUrl` and `ConnectToAllocation` for validated client travel to the allocated dedicated server.
+- Travel options carry only the one-time allocation envelope: allocation id, match id, connect token, target server id and network build.
+- Adds allocation/match-correlated dedicated-server admission failure events.
+- `ASPProtocolGameMode::PreLogin` rejects malformed envelopes, wrong target servers, incompatible builds and unavailable/draining admission services.
+- `InitNewPlayer` records timeout-bound pending admissions.
+- `HandleStartingNewPlayer_Implementation` suppresses pawn creation until backend admission succeeds.
+- `PostLogin` redeems the one-time token and immediately clears it from pending GameMode state.
+- Successful backend admission promotes the trusted backend user id, assigns a competitive team/slot and resumes player startup.
+- Failed or timed-out admissions are kicked before competitive participation.
+- Pending disconnects do not create reconnect reservations.
+- `ASPPlayerState` now carries a replicated backend-authenticated user id.
+- Adds `test/unreal-admission-contract.mjs` and a CI step that guards the source-level travel/admission contract until UE5.6 compilation is available.

@@ -169,18 +169,18 @@ Each persistent allocation stores its owning user, selected node/server id, targ
 
 ### Dedicated-server connection admission
 
-Before accepting the connection, the trusted dedicated server must redeem the presented token through:
+Allocation now hands the client a concrete host/port plus a one-time connect token. `USPBackendSessionSubsystem::ConnectToAllocation` builds the Unreal travel URL and includes allocation id, match id, token, target server id and network build as short-lived admission options.
 
-```text
-POST /v1/matches/admit
-x-match-server-secret: <infrastructure-only secret>
-```
+`ASPProtocolGameMode` enforces a real pending admission gate on dedicated servers:
 
-The admission request supplies `allocationId`, `matchId` and the presented `connectToken`. The backend verifies the token hash, allocation/match identity, expiry and unconsumed state atomically. A successful redemption binds the connection to the allocated `userId`, marks the allocation `live`, records `connect_token_consumed_at`, and returns the selected server/network identity. The same token cannot be replayed; a second redemption is rejected with `403 admission-denied`.
+- malformed/wrong-target joins are rejected in `PreLogin`;
+- controllers are held pending after `InitNewPlayer`;
+- `HandleStartingNewPlayer` blocks pawn creation;
+- `PostLogin` redeems the one-time token through the node-authenticated backend;
+- successful responses are correlated to allocation/match/server/build before team/slot assignment;
+- admission failures/timeouts are kicked before competitive participation.
 
-The game client must never contain `MATCH_SERVER_SECRET`. That credential belongs only to backend/dedicated-server infrastructure.
-
-Compatibility metadata is exposed through `/health`, `/v1/compatibility`, authenticated session/allocation responses, reconnect responses and the WebSocket hello payload. Session refresh rotates still-valid 15-minute Bearer sessions; reconnect endpoints enforce session ownership, hashed reconnect tokens and a 90-second reserved-slot deadline. Matchmaking identity/rating/trust are server-owned, and authoritative match telemetry requires the infrastructure-only match-server credential.
+Production enrollment is additionally orchestrator-attested, while ongoing server authority uses expiring per-node credentials.
 
 ### Backend validation
 
@@ -223,18 +223,17 @@ Production content still to author includes final Embassy geometry, skeletal mes
 
 ## Development path after v1.0.1
 
-The next production milestones are:
-1. compile the v1.0.1 Unreal networking additions in UE5.6 and resolve any UHT/compiler-specific issues;
-2. bind ready-room, session-expiry and reconnect UMG widgets to `USPBackendSessionSubsystem` delegates;
-3. implement the trusted platform/account bootstrap that supplies signed game sessions to Unreal;
-4. wire `ConnectHost`, `ConnectPort` and the short-lived connect token into OnlineSubsystem/client travel;
-5. have the dedicated-server connection handler redeem `/v1/matches/admit` before spawning/possessing the player;
-6. integrate the regional server registry with the real dedicated-server process/orchestrator and replace the shared infrastructure credential with per-node identity;
-7. author the production Embassy map and objective sites;
-8. add final first-person character/weapon animation and spatial audio;
-9. perform real dedicated-server 5v5 replication, token-refresh, admission, reconnect, scheduler-failover, round-transition and latency testing;
-10. expand from the hardened vertical slice toward Alpha content.
+The backend scheduler, per-node identity, credential rotation, orchestrator attestation, client travel handoff and pre-spawn admission gate are now implemented at source/integration-test level.
 
+Remaining production milestones:
+
+1. compile the Unreal networking layer with UE5.6/UHT;
+2. validate packaged client → dedicated-server travel and pending login behavior;
+3. bind ready-room, session-expiry and reconnect UMG;
+4. implement trusted platform/account bootstrap;
+5. author final Embassy production geometry/assets/audio;
+6. run real 10-client/5v5 replication, admission, reconnect, rotation, scheduler-failover and latency soak testing;
+7. resolve any UE-specific runtime/OnlineSubsystem issues found by that pass.
 
 ### Per-node dedicated-server identity
 

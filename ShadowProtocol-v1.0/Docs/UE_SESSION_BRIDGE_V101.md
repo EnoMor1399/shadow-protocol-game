@@ -8,18 +8,17 @@ The bridge is intentionally a `UGameInstanceSubsystem` so compatibility state, t
 
 ## Security boundary
 
-The Unreal client must **never** contain `SESSION_BOOTSTRAP_SECRET` or `MATCH_SERVER_SECRET`.
+`USPBackendSessionSubsystem` is a shipped-client component. It may hold only the signed game-session token supplied by trusted account/platform integration plus short-lived allocation/reconnect tokens.
 
-`POST /v1/auth/game-session` is a trusted identity/platform bootstrap endpoint. A production platform login, account service or other trusted identity integration obtains the signed game-session response and passes only the resulting session values to Unreal:
+It must never receive:
 
-- session id;
-- session token;
-- region;
-- expiry timestamp.
+- `SESSION_BOOTSTRAP_SECRET`;
+- `SERVER_REGISTRATION_SECRET`;
+- `ORCHESTRATOR_ATTESTATION_SECRET`;
+- `SP_NODE_ATTESTATION`;
+- per-node dedicated-server credentials.
 
-`InstallAuthenticatedSession(...)` keeps those values in memory. The subsystem does not persist the Bearer token to config, SaveGame or logs.
-
-`MATCH_SERVER_SECRET` belongs only on trusted dedicated-server/backend infrastructure. Authoritative match telemetry, server-registry lifecycle and allocation-admission endpoints reject ordinary game clients that do not present that credential.
+The dedicated-server bridge owns server-only trust material. Production node enrollment uses a one-time orchestrator attestation; subsequent authoritative calls use the node's expiring credential.
 
 ## Client flow
 
@@ -85,36 +84,37 @@ The migration chain includes both `v101_connection_target.sql` and `v101_server_
 
 ## Server registry lifecycle
 
-The infrastructure lifecycle is:
+1. Orchestration launches a dedicated-server process with routing arguments, `SERVER_REGISTRATION_SECRET`, and a fresh `SP_NODE_ATTESTATION`.
+2. The server registers through `POST /v1/servers/register`.
+3. Backend verifies and consumes the attestation, then returns a per-node credential.
+4. Heartbeat, drain, allocation release, admission and authoritative match writes use `x-sp-server-id` plus `x-sp-node-credential`.
+5. Node credentials rotate before expiry with a short previous-token overlap.
+6. Planned maintenance uses drain so no new allocations target the node.
+7. Expired reservations are reclaimed and released capacity returns to the scheduler.
 
-1. Dedicated-server process starts with the infrastructure-only `MATCH_SERVER_SECRET`.
-2. It calls `POST /v1/servers/register` with its id, region, build, public endpoint and capacity.
-3. It calls `POST /v1/servers/heartbeat` frequently enough to stay inside the scheduler heartbeat TTL.
-4. When planned maintenance begins, it calls `POST /v1/servers/drain`; new allocations stop immediately while existing allocations can complete.
-5. On match/allocation completion or failure, it calls `POST /v1/servers/release-allocation` so scheduler capacity is returned.
-6. Expired reservations that never reach admission are reclaimed automatically during later allocation requests.
-
-The current v1.0.1 registry uses the shared `MATCH_SERVER_SECRET` as the infrastructure trust credential. Per-node credentials/orchestrator identity are a later hardening step and must not be inferred as already implemented.
+The shared registration secret is bootstrap-only; it is not an ongoing match authority credential.
 
 ## One-time connection admission
 
-The short-lived allocation token is **not** proof by itself until a trusted dedicated server redeems it.
+After allocation, call:
 
-Recommended connection sequence:
+```cpp
+BackendSession->ConnectToAllocation(PlayerController, Allocation);
+```
 
-1. Unreal receives `ConnectHost`, `ConnectPort`, `AllocationId`, `MatchId` and `ConnectToken` from `OnAllocationCompleted`.
-2. The online/travel layer connects to the returned host/port and presents the allocation/match/token data to the dedicated server during the server's admission handshake.
-3. The dedicated server calls `POST /v1/matches/admit` over its trusted backend channel and supplies:
-   - `allocationId`;
-   - `matchId`;
-   - the presented `connectToken`;
-   - infrastructure header `x-match-server-secret`.
-4. The backend hashes the presented token and atomically verifies allocation id, match id, token hash, expiry, valid pre-live status and that the token has never been consumed.
-5. On success, the backend returns the allocated `userId`, selected server id, region, network build and backend protocol, changes the allocation to `live`, and records `connect_token_consumed_at`.
-6. The dedicated server admits/spawns/possesses the player only after that success response.
-7. A wrong, expired or replayed token receives `403 admission-denied` and must not create a player session.
+The client bridge validates allocation/match ids, server/build option values, target host/port and token shape, then performs absolute `ClientTravel` with the one-time admission envelope.
 
-The client never calls the privileged admission endpoint itself and must never know `MATCH_SERVER_SECRET`. This keeps admission authoritative even if a client tampers with local travel parameters.
+On the dedicated server, `ASPProtocolGameMode` now implements the pre-spawn gate:
+
+- `PreLogin` validates the URL envelope and server/build target.
+- `InitNewPlayer` creates a timeout-bound pending admission.
+- `HandleStartingNewPlayer_Implementation` refuses pawn creation while pending.
+- `PostLogin` asks `USPDedicatedServerBackendSubsystem` to redeem the one-time token.
+- admission success must correlate to allocation, match, server and build;
+- only then is the backend user identity trusted, a competitive slot assigned, and pawn spawning resumed;
+- failure/timeout kicks the controller.
+
+The connect token is cleared from the pending GameMode state immediately after the backend request begins.
 
 ## Session rotation
 
@@ -225,18 +225,18 @@ Primary files:
 
 ## Validation boundary
 
-The browser and backend paths are validated by GitHub Actions, including compatibility/session/allocation, production regional scheduling, heartbeat/capacity enforcement, connection-target metadata, session refresh, authenticated matchmaking identity, dedicated-server telemetry authorization, real PostgreSQL schema initialization, one-time admission and reserved-slot recovery. The Unreal bridge has been source-reviewed only in the current environment. It still requires Unreal Header Tool, UE C++ compilation, PIE and packaged-client testing before it can be treated as production-compiled code.
+GitHub Actions now includes an Unreal admission source-contract test in addition to backend/browser validation. It verifies the expected C++ integration points remain present, but it does **not** replace UHT or UE compilation.
+
+UE5.6 remains required for UHT, Development Server compilation, PIE/package validation, real `ClientTravel`, socket/login behavior and 5v5 soak testing.
 
 ## Next integration tasks
 
-1. Compile the module in Unreal Engine 5.6 and fix any UHT/compiler-specific issues.
-2. Bind ready-room/session-expiry/reconnect UMG widgets to subsystem delegates.
-3. Implement the trusted platform/account bootstrap that supplies the signed game session.
-4. Implement actual client travel / OnlineSubsystem connection using the returned host, port and short-lived connect token.
-5. Implement the dedicated-server pre-login/admission layer that calls `/v1/matches/admit` before player spawn/possession.
-6. Integrate server register/heartbeat/drain/release calls into the real dedicated-server process and orchestration lifecycle; add per-node credentials after the shared-secret bootstrap model.
-7. Run 10-client dedicated-server compatibility, scheduler failover, admission, token-refresh, reconnect and round-transition tests.
-
+1. Compile all v1.0.1 Unreal networking additions in UE5.6 and resolve UHT/compiler issues.
+2. Run packaged client → dedicated-server `ConnectToAllocation` travel.
+3. Validate concurrent successful, denied, expired and replayed admissions before pawn spawn.
+4. Bind ready-room, session-expiry and reconnect UMG widgets.
+5. Implement trusted platform/account bootstrap for signed game sessions.
+6. Run orchestrator launch, node rotation, scheduler failover, reconnect and latency soak tests with 10 clients.
 
 ## Per-node server identity update
 

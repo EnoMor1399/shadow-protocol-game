@@ -24,27 +24,30 @@ Supply non-secret server identity/routing values through command-line arguments:
 -SPCapacity=10
 ```
 
-Supply the infrastructure credential only through the dedicated-server process environment:
+Trusted runtime material comes from the dedicated-server process environment:
 
 ```text
-MATCH_SERVER_SECRET=<strong infrastructure secret>
+SERVER_REGISTRATION_SECRET=<registration-bootstrap secret>
+SP_NODE_ATTESTATION=<short-lived single-use orchestrator assertion>
 ```
 
-`ConfigureFromRuntime()` refuses to activate outside a dedicated-server process and requires all routing values plus the runtime secret.
+`MATCH_SERVER_SECRET` is retained only as a v1.0.1 migration fallback name for the registration bootstrap secret. It is not the continuing match-authority credential.
+
+`ConfigureFromRuntime()` refuses to activate outside a dedicated-server process. Production registration additionally requires the orchestrator attestation enforced by the backend.
 
 ## Startup lifecycle
 
 On `UGameInstanceSubsystem::Initialize` in a dedicated-server process:
 
-1. Read command-line server identity and public routing values.
-2. Read `MATCH_SERVER_SECRET` from the process environment.
+1. Read server identity/public routing from command-line arguments.
+2. Read `SERVER_REGISTRATION_SECRET` and the one-time `SP_NODE_ATTESTATION` from the process environment.
 3. Read the immutable game network build from `USPBuildInfoLibrary`.
-4. Call `POST /v1/servers/register`.
-5. Validate that the response contains a node id and server id.
-6. Mark the server registered.
-7. Start heartbeat scheduling using the backend-provided heartbeat TTL.
+4. Call `POST /v1/servers/register` with bootstrap proof plus the attestation.
+5. Backend validates/consumes the attestation and returns a per-node credential.
+6. Keep the node credential only in dedicated-server memory and clear the consumed attestation.
+7. Start heartbeat and credential-rotation scheduling from backend-provided policy.
 
-The heartbeat interval is approximately one third of the backend TTL and is clamped to a maximum of 10 seconds.
+The heartbeat interval is approximately one third of the backend TTL, while node credential rotation is scheduled at roughly 75% of credential lifetime.
 
 ## Healthy-node heartbeat
 
@@ -73,55 +76,37 @@ During subsystem deinitialization, a best-effort drain request is also sent if t
 
 ## One-time connection admission
 
-A client allocation contains:
+Client allocation produces `allocationId`, `matchId`, `connectToken`, target host/port, server id and network build. The client passes the short-lived allocation envelope through Unreal travel options.
 
-- `allocationId`
-- `matchId`
-- `connectToken`
-- `connectHost`
-- `connectPort`
-- `serverId`
-
-The dedicated server must treat a socket/transport connection as **pending**, not admitted, until backend redemption succeeds.
-
-Call:
+The dedicated server treats the controller as **pending**, not admitted, and calls:
 
 ```cpp
 DedicatedServerBackend->AdmitConnection(AllocationId, MatchId, ConnectToken);
 ```
 
-The subsystem calls:
+The backend request is authenticated with the dedicated server's **per-node credential**, not the shared registration bootstrap secret. Backend ownership checks bind the request to that node's allocation.
 
-```text
-POST /v1/matches/admit
-```
-
-with the infrastructure credential and the presented one-time allocation token.
-
-On success it additionally verifies that:
-
-- the backend returned `admitted=true`;
-- the returned `serverId` equals this dedicated server's configured id;
-- the returned `networkBuild` equals `USPBuildInfoLibrary::GetNetworkBuildId()`.
-
-Only after `OnAdmissionCompleted` fires should the game-mode/session layer create or possess the authoritative player pawn.
-
-Wrong, expired or replayed allocation tokens remain backend failures and must not produce a player session.
+The Unreal bridge correlates both success and failure by allocation/match id. Success is accepted only when the response matches the expected allocation, match, server id and network build. Wrong, expired or replayed allocation tokens never produce a competitive player session.
 
 ## Pre-login integration boundary
 
-Unreal's normal `PreLogin` path is synchronous while the backend admission request is asynchronous. Do not fake success in `PreLogin` and redeem later.
+The pending admission gate is now implemented in `ASPProtocolGameMode`.
 
-The production integration should place connecting clients into a pending admission gate:
+1. `USPBackendSessionSubsystem::ConnectToAllocation` performs absolute `ClientTravel` to the allocated host/port and includes only the one-time allocation envelope:
+   - `spAllocationId`
+   - `spMatchId`
+   - `spConnectToken`
+   - `spServerId`
+   - `spNetworkBuild`
+2. `PreLogin` rejects missing/malformed envelopes, wrong server ids, incompatible network builds, unavailable registry state and draining servers.
+3. `InitNewPlayer` creates a pending admission record with a short timeout.
+4. `HandleStartingNewPlayer_Implementation` suppresses pawn creation while that record exists.
+5. `PostLogin` starts asynchronous backend redemption, then clears the plaintext connect token from the pending record.
+6. Correlated `OnAdmissionCompleted` promotes the trusted backend `userId`, assigns a team/competitive slot, and resumes `HandleStartingNewPlayer`.
+7. Correlated admission failure or timeout kicks the controller before it can enter a competitive slot.
+8. Pending disconnects are removed without creating reconnect reservations.
 
-1. Parse `allocationId`, `matchId` and `connectToken` from the connection handshake/options.
-2. Do not spawn or possess the player yet.
-3. Call `AdmitConnection(...)`.
-4. On `OnAdmissionCompleted`, bind the returned backend `userId` to the pending connection and continue authoritative login/spawn.
-5. On `OnRequestFailed`, reject/close the pending connection.
-6. Apply a short server-side timeout so abandoned pending admissions cannot consume resources indefinitely.
-
-This gate still needs to be wired into the final dedicated-server GameMode / OnlineSubsystem connection flow and validated in UE5.6.
+This preserves Unreal's synchronous `PreLogin` contract while moving the authoritative remote check to a safe pre-spawn asynchronous gate.
 
 ## Allocation release
 
@@ -145,30 +130,34 @@ This is required so the scheduler can return node capacity after closed or faile
 
 ## Security properties
 
-- The shipped game client never receives or persists `MATCH_SERVER_SECRET`.
-- The dedicated-server secret is read only from the process environment.
-- The secret is never exposed by a Blueprint getter, event payload or log statement.
-- Connection tokens remain one-time backend-validated admission material.
-- Server/build identity is checked again after admission before gameplay continuation.
-- Registration/heartbeat/drain/release remain backend-authoritative operations.
+- Shipped clients never receive registration secrets, orchestrator signing keys, node credentials or backend infrastructure credentials.
+- The client carries only the short-lived one-time allocation token needed for server admission.
+- Production node enrollment requires bootstrap proof plus a single-use orchestrator attestation.
+- Continuing server authority uses expiring per-node credentials with bounded rotation overlap.
+- Match-scoped server writes are checked against allocation/node ownership.
+- Admission success is correlated to allocation + match + server + network build before pawn spawn.
+- Pending unauthenticated controllers are excluded from competitive slots and readiness counts.
+- Connect tokens are cleared from the server's pending-login record immediately after the admission request starts.
 
 ## Current validation boundary
 
-The backend registry, capacity accounting, admission, reconnect and release behavior is covered by GitHub Actions/PostgreSQL integration tests.
+GitHub Actions validates browser syntax, strict backend TypeScript/security behavior, PostgreSQL registry/scheduler/attestation/credential-rotation/admission/reconnect/release, and an Unreal **source-contract** test that asserts the travel envelope and pending-admission gate remain present.
 
-`USPDedicatedServerBackendSubsystem` is a source-level Unreal addition. This environment does not provide UE5.6/UHT, so the new C++ still requires:
+This environment still does not provide Unreal Engine 5.6/UHT, so the C++ additions remain source-validated rather than engine-compiled. Production sign-off still requires:
 
 1. Unreal Header Tool validation;
 2. Development Server C++ compilation;
-3. dedicated-server startup with runtime command-line/environment configuration;
-4. real heartbeat and drain verification;
-5. pending-connection admission integration;
-6. 10-client/5v5 admission, reconnect and failover soak testing.
+3. packaged client + dedicated-server launch;
+4. real travel through `ConnectToAllocation`;
+5. simultaneous pending admissions;
+6. rejected/expired/replayed-token disconnect behavior;
+7. 10-client/5v5 reconnect/failover/credential-rotation soak testing.
 
 ## Next hardening step
 
-The current backend still authenticates trusted server calls with one shared infrastructure credential. The next trust-boundary upgrade should rotate registration into **per-node credentials** so a registered server can act only as its own node and only on allocations assigned to that node.
+The backend trust-boundary milestones—per-node credentials, bounded rotation, orchestrator attestation, and pre-spawn admission—are implemented at source/integration-test level.
 
+The next blocker is **UE5.6 runtime validation** plus trusted platform/account bootstrap and real 5v5 network soak testing.
 
 ## Per-node credential hardening
 
