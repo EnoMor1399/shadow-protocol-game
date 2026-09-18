@@ -591,10 +591,19 @@ app.post('/v1/matches/reconnect-ticket',async(req,reply)=>{
   const session=requireCompatibleSession(req,reply);if(!session)return;
   const parsed=reconnectTicketSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(!pool)return reply.code(503).send({error:'database-not-configured'});
-  const token=randomBytes(32).toString('base64url'),hash=sha256(token),deadline=new Date(Date.now()+90_000).toISOString();
-  const r=await pool.query(`update match_player_slots set connection_state='reconnecting',ready=false,reconnect_token_hash=$4,reconnect_deadline=$5 where match_id=$1 and round_number=$2 and slot_index=$3 and user_id=$6 returning slot_index`,[parsed.data.matchId,parsed.data.roundNumber,parsed.data.slotIndex,hash,deadline,session.uid]);
-  if(!r.rowCount)return reply.code(403).send({error:'slot-ownership-required'});
-  return reply.code(201).send({reconnectToken:token,reconnectDeadline:deadline,graceSeconds:90,networkBuild:session.build,backendProtocol:BACKEND_PROTOCOL_VERSION});
+  const token=randomBytes(32).toString('base64url'),hash=sha256(token);
+  // A reservation is created once from a connected slot. Repeated requests must
+  // not replace the token or extend its deadline, even under concurrent retries.
+  const r=await pool.query(`update match_player_slots s
+    set connection_state='reconnecting',ready=false,reconnect_token_hash=$4,reconnect_deadline=now()+interval '90 seconds'
+    from matches m
+    where s.match_id=$1 and s.round_number=$2 and s.slot_index=$3 and s.user_id=$5
+      and s.connection_state='connected' and s.reconnect_token_hash is null and s.reconnect_deadline is null
+      and m.id=s.match_id and m.ended_at is null and m.region=$6 and m.server_build=$7
+      and exists(select 1 from server_allocations a where a.match_id=m.id and a.status='live')
+    returning s.slot_index,s.reconnect_deadline`,[parsed.data.matchId,parsed.data.roundNumber,parsed.data.slotIndex,hash,session.uid,session.region,session.build]);
+  if(!r.rowCount)return reply.code(403).send({error:'reconnect-reservation-denied'});
+  return reply.code(201).send({reconnectToken:token,reconnectDeadline:new Date(r.rows[0].reconnect_deadline).toISOString(),graceSeconds:90,networkBuild:session.build,backendProtocol:BACKEND_PROTOCOL_VERSION});
 });
 
 const reconnectSchema=z.object({matchId:z.string().uuid(),roundNumber:z.number().int().min(1).max(9),slotIndex:z.number().int().min(0).max(9),reconnectToken:z.string().min(32).max(256)});
@@ -603,7 +612,14 @@ app.post('/v1/matches/reconnect',async(req,reply)=>{
   const parsed=reconnectSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(!pool)return reply.code(503).send({error:'database-not-configured'});
   const tokenHash=sha256(parsed.data.reconnectToken);
-  const r=await pool.query(`update match_player_slots set connection_state='connected',reconnect_deadline=null,reconnect_token_hash=null where match_id=$1 and round_number=$2 and slot_index=$3 and user_id=$4 and reconnect_token_hash=$5 and reconnect_deadline>now() returning slot_index,user_id,team,spawn_group`,[parsed.data.matchId,parsed.data.roundNumber,parsed.data.slotIndex,session.uid,tokenHash]);
+  const r=await pool.query(`update match_player_slots s
+    set connection_state='connected',ready=false,reconnect_deadline=null,reconnect_token_hash=null
+    from matches m
+    where s.match_id=$1 and s.round_number=$2 and s.slot_index=$3 and s.user_id=$4
+      and s.connection_state='reconnecting' and s.reconnect_token_hash=$5 and s.reconnect_deadline>now()
+      and m.id=s.match_id and m.ended_at is null and m.region=$6 and m.server_build=$7
+      and exists(select 1 from server_allocations a where a.match_id=m.id and a.status='live')
+    returning s.slot_index,s.user_id,s.team,s.spawn_group`,[parsed.data.matchId,parsed.data.roundNumber,parsed.data.slotIndex,session.uid,tokenHash,session.region,session.build]);
   if(!r.rowCount)return reply.code(403).send({error:'reconnect-denied'});
   return reply.send({reconnected:true,slot:r.rows[0],networkBuild:session.build,backendProtocol:BACKEND_PROTOCOL_VERSION});
 });

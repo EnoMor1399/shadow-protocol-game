@@ -225,3 +225,11 @@ See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flo
 - Add scoped engine failure callbacks with sanitized persistent error state and UI hooks.
 - Compile and execute the shared C++ host validator in CI (49 cases plus ASCII sweep).
 - Expand Unreal source contracts to fourteen; document the missing fresh-admission reconnect bridge.
+
+## Bounded reconnect reservation pass
+
+- Prevent reconnect-token replacement and deadline extension through repeated requests.
+- Require connected/eligible slots, unfinished matching region/build and live allocations.
+- Enforce reconnecting state on redemption and keep restored players unready.
+- Add real PostgreSQL race, replay, expiry and closed-match/allocation regression cases.
+- Fresh Unreal admission credentials and packaged reconnect remain pending.

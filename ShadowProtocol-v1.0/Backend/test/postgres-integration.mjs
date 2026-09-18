@@ -348,13 +348,15 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   assert.equal(ready.ready, true);
   assert.equal(ready.spawn_group, 'BRAVO');
 
-  const ticketResponse = await fetch(`${BASE_URL}/v1/matches/reconnect-ticket`, {
-    method: 'POST',
-    headers: playerHeaders,
-    body: JSON.stringify({ matchId: allocation.matchId, roundNumber: 1, slotIndex: 0 })
+  const reconnectBody = { matchId: allocation.matchId, roundNumber: 1, slotIndex: 0 };
+  const playerPost = (path, body) => fetch(`${BASE_URL}${path}`, {
+    method: 'POST', headers: playerHeaders, body: JSON.stringify(body)
   });
-  assert.equal(ticketResponse.status, 201);
-  const ticket = await ticketResponse.json();
+  // Concurrent requests must produce one credential, never rotate or extend it.
+  const ticketResponses = await Promise.all(Array.from({ length: 4 }, () =>
+    playerPost('/v1/matches/reconnect-ticket', reconnectBody)));
+  assert.deepEqual(ticketResponses.map(r => r.status).sort(), [201, 403, 403, 403]);
+  const ticket = await ticketResponses.find(r => r.status === 201).json();
   assert.ok(ticket.reconnectToken.length >= 32);
   assert.equal(ticket.graceSeconds, 90);
 
@@ -368,6 +370,21 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   assert.ok(reconnectingSlot.rows[0].reconnect_token_hash);
   assert.notEqual(reconnectingSlot.rows[0].reconnect_token_hash, ticket.reconnectToken);
   assert.ok(new Date(reconnectingSlot.rows[0].reconnect_deadline).getTime() > Date.now());
+  const repeatTicket = await playerPost('/v1/matches/reconnect-ticket', reconnectBody);
+  assert.equal(repeatTicket.status, 403);
+  const unchangedTicket = await db.query(
+    'select reconnect_token_hash,reconnect_deadline from match_player_slots where match_id=$1 and round_number=1 and slot_index=0',
+    [allocation.matchId]
+  );
+  assert.equal(unchangedTicket.rows[0].reconnect_token_hash, reconnectingSlot.rows[0].reconnect_token_hash);
+  assert.equal(unchangedTicket.rows[0].reconnect_deadline.toISOString(), ticket.reconnectDeadline);
+  // Match identity and completion gates also apply to redemption; denial must not consume the token.
+  await db.query("update matches set region='other' where id=$1", [allocation.matchId]);
+  assert.equal((await playerPost('/v1/matches/reconnect', { ...reconnectBody, reconnectToken: ticket.reconnectToken })).status, 403);
+  await db.query('update matches set region=$2,ended_at=now() where id=$1', [allocation.matchId, allocation.region]);
+  assert.equal((await playerPost('/v1/matches/reconnect', { ...reconnectBody, reconnectToken: ticket.reconnectToken })).status, 403);
+  await db.query('update matches set ended_at=null where id=$1', [allocation.matchId]);
+
 
   const deniedResponse = await fetch(`${BASE_URL}/v1/matches/reconnect`, {
     method: 'POST',
@@ -381,18 +398,10 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   });
   assert.equal(deniedResponse.status, 403);
 
-  const reconnectResponse = await fetch(`${BASE_URL}/v1/matches/reconnect`, {
-    method: 'POST',
-    headers: playerHeaders,
-    body: JSON.stringify({
-      matchId: allocation.matchId,
-      roundNumber: 1,
-      slotIndex: 0,
-      reconnectToken: ticket.reconnectToken
-    })
-  });
-  assert.equal(reconnectResponse.status, 200);
-  const reconnect = await reconnectResponse.json();
+  const reconnectResponses = await Promise.all(Array.from({ length: 4 }, () =>
+    playerPost('/v1/matches/reconnect', { ...reconnectBody, reconnectToken: ticket.reconnectToken })));
+  assert.deepEqual(reconnectResponses.map(r => r.status).sort(), [200, 403, 403, 403]);
+  const reconnect = await reconnectResponses.find(r => r.status === 200).json();
   assert.equal(reconnect.reconnected, true);
   assert.equal(Number(reconnect.slot.slot_index), 0);
   assert.equal(reconnect.slot.user_id, TEST_USER_ID);
@@ -406,6 +415,14 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   assert.equal(restoredSlot.rows[0].connection_state, 'connected');
   assert.equal(restoredSlot.rows[0].reconnect_token_hash, null);
   assert.equal(restoredSlot.rows[0].reconnect_deadline, null);
+  assert.equal((await playerPost('/v1/matches/reconnect', { ...reconnectBody, reconnectToken: ticket.reconnectToken })).status, 403);
+  const secondTicketResponse = await playerPost('/v1/matches/reconnect-ticket', reconnectBody);
+  assert.equal(secondTicketResponse.status, 201);
+  const secondTicket = await secondTicketResponse.json();
+  await db.query("update match_player_slots set reconnect_deadline=now()-interval '1 second' where match_id=$1 and round_number=1 and slot_index=0", [allocation.matchId]);
+  assert.equal((await playerPost('/v1/matches/reconnect', { ...reconnectBody, reconnectToken: secondTicket.reconnectToken })).status, 403);
+  assert.equal((await playerPost('/v1/matches/reconnect-ticket', reconnectBody)).status, 403);
+
 
   const crossNodeRelease = await nodePost('/v1/servers/release-allocation', { allocationId: allocation.allocationId, matchId: allocation.matchId, outcome: 'closed' }, 'ACC-DRAIN', drainNode.nodeCredential);
   assert.equal(crossNodeRelease.status, 403);
@@ -420,6 +437,9 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   assert.equal(release.serverId, PRIMARY_SERVER_ID);
   assert.equal(release.status, 'closed');
   assert.equal(release.activeAllocations, 0);
+  // Even an otherwise eligible slot cannot reserve against a released allocation.
+  await db.query("update match_player_slots set connection_state='connected',reconnect_token_hash=null,reconnect_deadline=null where match_id=$1 and round_number=1 and slot_index=0", [allocation.matchId]);
+  assert.equal((await playerPost('/v1/matches/reconnect-ticket', reconnectBody)).status, 403);
 
   const releasedNode = await db.query(`select active_allocations from game_server_nodes where server_id=$1`, [PRIMARY_SERVER_ID]);
   assert.equal(Number(releasedNode.rows[0].active_allocations), 0);
