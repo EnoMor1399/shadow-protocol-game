@@ -1,6 +1,7 @@
 #include "SPBackendSessionSubsystem.h"
 
 #include "SPBuildInfoLibrary.h"
+#include "HAL/PlatformTime.h"
 #include "Dom/JsonObject.h"
 #include "GameFramework/PlayerController.h"
 #include "Serialization/JsonReader.h"
@@ -24,6 +25,87 @@ FString SerializeJson(const TSharedRef<FJsonObject>& Payload)
 }
 }
 
+void USPBackendSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
+{
+    Super::Initialize(Collection);
+    ExpiryTicker = FTSTicker::GetCoreTicker().AddTicker(
+        FTickerDelegate::CreateUObject(this, &USPBackendSessionSubsystem::TickSessionExpiry), 1.0f);
+}
+
+void USPBackendSessionSubsystem::Deinitialize()
+{
+    FTSTicker::GetCoreTicker().RemoveTicker(ExpiryTicker);
+    ExpiryTicker.Reset();
+    ClearAuthenticatedSession();
+    if (CompatibilityRequest.IsValid())
+    {
+        CompatibilityRequest->OnProcessRequestComplete().Unbind();
+        CompatibilityRequest->CancelRequest();
+        CompatibilityRequest.Reset();
+    }
+    Super::Deinitialize();
+}
+
+bool USPBackendSessionSubsystem::SetSessionExpiry(const FString& ExpiresAt)
+{
+    FDateTime Parsed;
+    if (!FDateTime::ParseIso8601(*ExpiresAt, Parsed)) return false;
+    const double Remaining = (Parsed - FDateTime::UtcNow()).GetTotalSeconds();
+    if (Remaining <= 0.0) return false;
+    SessionExpiryUtc = Parsed;
+    SessionExpiryMonotonic = FPlatformTime::Seconds() + Remaining;
+    SessionExpiresAt = ExpiresAt;
+    return true;
+}
+
+float USPBackendSessionSubsystem::GetSessionSecondsRemaining() const
+{
+    if (SessionToken.IsEmpty()) return 0.0f;
+    // A backwards wall-clock adjustment must not extend the installed lifetime.
+    const double Remaining = FMath::Min((SessionExpiryUtc - FDateTime::UtcNow()).GetTotalSeconds(),
+        SessionExpiryMonotonic - FPlatformTime::Seconds());
+    return static_cast<float>(FMath::Max(0.0, Remaining));
+}
+
+bool USPBackendSessionSubsystem::TickSessionExpiry(float)
+{
+    if (!SessionToken.IsEmpty() && !HasAuthenticatedSession()) ExpireSession();
+    return true;
+}
+
+void USPBackendSessionSubsystem::ExpireSession()
+{
+    if (SessionToken.IsEmpty()) return;
+    ClearAuthenticatedSession();
+    bSessionExpired = true;
+    OnSessionExpired.Broadcast(TEXT("Your backend session expired. Sign in again for matchmaking or reconnect."));
+}
+
+void USPBackendSessionSubsystem::CancelAuthenticatedRequests()
+{
+    // Remove membership first, including for providers which complete during cancellation.
+    TArray<FHttpRequestPtr> Requests = MoveTemp(ActiveAuthenticatedRequests);
+    ActiveAuthenticatedRequests.Reset();
+    for (const FHttpRequestPtr& Request : Requests)
+    {
+        if (!Request.IsValid()) continue;
+        Request->OnProcessRequestComplete().Unbind();
+        Request->CancelRequest();
+    }
+    bRefreshPending = false;
+}
+
+bool USPBackendSessionSubsystem::ConsumeAuthenticatedResponse(FHttpRequestPtr Request)
+{
+    if (!Request.IsValid() || ActiveAuthenticatedRequests.Remove(Request) == 0) return false;
+    if (!HasAuthenticatedSession())
+    {
+        ExpireSession();
+        return false;
+    }
+    return Request->GetHeader(TEXT("Authorization")) == TEXT("Bearer ") + SessionToken;
+}
+
 void USPBackendSessionSubsystem::SetBackendBaseUrl(const FString& InBaseUrl)
 {
     FString Normalized = InBaseUrl;
@@ -33,8 +115,17 @@ void USPBackendSessionSubsystem::SetBackendBaseUrl(const FString& InBaseUrl)
         Normalized.LeftChopInline(1);
     }
 
-    if (!Normalized.IsEmpty())
+    if (!Normalized.IsEmpty() && Normalized != BackendBaseUrl)
     {
+        ClearAuthenticatedSession();
+        bCompatibilityVerified = false;
+        LastCompatibility = FSPBackendCompatibility();
+        if (CompatibilityRequest.IsValid())
+        {
+            CompatibilityRequest->OnProcessRequestComplete().Unbind();
+            CompatibilityRequest->CancelRequest();
+            CompatibilityRequest.Reset();
+        }
         BackendBaseUrl = Normalized;
     }
 }
@@ -50,6 +141,11 @@ FString USPBackendSessionSubsystem::BuildUrl(const FString& Path) const
 
 bool USPBackendSessionSubsystem::CanUseAuthenticatedMatchEndpoint(const FString& Context)
 {
+    if (bRefreshPending)
+    {
+        OnRequestFailed.Broadcast(Context, TEXT("Session refresh is in progress. Retry after it completes."));
+        return false;
+    }
     if (!bCompatibilityVerified)
     {
         OnRequestFailed.Broadcast(Context, TEXT("Compatibility must be verified before using authenticated match services."));
@@ -58,6 +154,7 @@ bool USPBackendSessionSubsystem::CanUseAuthenticatedMatchEndpoint(const FString&
 
     if (!HasAuthenticatedSession())
     {
+        ExpireSession();
         OnRequestFailed.Broadcast(Context, TEXT("An authenticated game session is required."));
         return false;
     }
@@ -73,14 +170,23 @@ TSharedRef<IHttpRequest, ESPMode::ThreadSafe> USPBackendSessionSubsystem::Create
     Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
     Request->SetHeader(TEXT("Accept"), TEXT("application/json"));
     Request->SetHeader(TEXT("Authorization"), TEXT("Bearer ") + SessionToken);
+    Request->SetTimeout(15.0f);
+    ActiveAuthenticatedRequests.Add(Request);
     return Request;
 }
 
 void USPBackendSessionSubsystem::CheckCompatibility()
 {
     bCompatibilityVerified = false;
+    if (CompatibilityRequest.IsValid())
+    {
+        CompatibilityRequest->OnProcessRequestComplete().Unbind();
+        CompatibilityRequest->CancelRequest();
+    }
 
     const TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
+    CompatibilityRequest = Request;
+    Request->SetTimeout(15.0f);
     Request->SetURL(BuildUrl(TEXT("/v1/compatibility")));
     Request->SetVerb(TEXT("GET"));
     Request->SetHeader(TEXT("Accept"), TEXT("application/json"));
@@ -92,8 +198,10 @@ void USPBackendSessionSubsystem::CheckCompatibility()
     }
 }
 
-void USPBackendSessionSubsystem::HandleCompatibilityResponse(FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
+void USPBackendSessionSubsystem::HandleCompatibilityResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful)
 {
+    if (Request != CompatibilityRequest) return;
+    CompatibilityRequest.Reset();
     if (!bWasSuccessful || !Response.IsValid())
     {
         BroadcastHttpFailure(TEXT("compatibility"), Response, bWasSuccessful);
@@ -167,37 +275,48 @@ bool USPBackendSessionSubsystem::ParseCompatibility(const TSharedPtr<FJsonObject
 
 void USPBackendSessionSubsystem::InstallAuthenticatedSession(const FString& InSessionId, const FString& InSessionToken, const FString& InRegion, const FString& InExpiresAt)
 {
-    if (InSessionId.IsEmpty() || InSessionToken.IsEmpty() || InRegion.IsEmpty())
+    ClearAuthenticatedSession();
+    if (InSessionId.IsEmpty() || InSessionToken.IsEmpty() || InRegion.IsEmpty() || !SetSessionExpiry(InExpiresAt))
     {
-        OnRequestFailed.Broadcast(TEXT("session"), TEXT("Authenticated session data is incomplete."));
+        OnRequestFailed.Broadcast(TEXT("session"), TEXT("Authenticated session data is incomplete or expired."));
         return;
     }
 
     SessionId = InSessionId;
     SessionToken = InSessionToken;
     SessionRegion = InRegion;
-    SessionExpiresAt = InExpiresAt;
 }
 
 void USPBackendSessionSubsystem::RefreshAuthenticatedSession()
 {
+    if (bRefreshPending) return;
+    if (!ActiveAuthenticatedRequests.IsEmpty())
+    {
+        OnRequestFailed.Broadcast(TEXT("session-refresh"), TEXT("Wait for active match requests before refreshing the session."));
+        return;
+    }
     if (!CanUseAuthenticatedMatchEndpoint(TEXT("session-refresh")))
     {
         return;
     }
 
     const TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = CreateAuthenticatedJsonRequest(TEXT("/v1/auth/refresh"), TEXT("POST"));
+    bRefreshPending = true;
     Request->SetContentAsString(TEXT("{}"));
     Request->OnProcessRequestComplete().BindUObject(this, &USPBackendSessionSubsystem::HandleSessionRefreshResponse);
 
     if (!Request->ProcessRequest())
     {
+        ActiveAuthenticatedRequests.Remove(Request);
+        bRefreshPending = false;
         OnRequestFailed.Broadcast(TEXT("session-refresh"), TEXT("Unable to start game-session refresh request."));
     }
 }
 
-void USPBackendSessionSubsystem::HandleSessionRefreshResponse(FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
+void USPBackendSessionSubsystem::HandleSessionRefreshResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful)
 {
+    if (!ConsumeAuthenticatedResponse(Request)) return;
+    bRefreshPending = false;
     if (!bWasSuccessful || !Response.IsValid())
     {
         BroadcastHttpFailure(TEXT("session-refresh"), Response, bWasSuccessful);
@@ -216,7 +335,6 @@ void USPBackendSessionSubsystem::HandleSessionRefreshResponse(FHttpRequestPtr, F
 
     if (StatusCode == 401 || StatusCode == 403)
     {
-        ClearAuthenticatedSession();
         BroadcastHttpFailure(TEXT("session-refresh"), Response, bWasSuccessful);
         return;
     }
@@ -255,6 +373,14 @@ void USPBackendSessionSubsystem::HandleSessionRefreshResponse(FHttpRequestPtr, F
         return;
     }
 
+    if (!SetSessionExpiry(RefreshedExpiresAt))
+    {
+        ExpireSession();
+        OnRequestFailed.Broadcast(TEXT("session-refresh"), TEXT("Backend returned an invalid or expired session lifetime."));
+        return;
+    }
+    // Token rotation invalidates requests still carrying the previous credential.
+    CancelAuthenticatedRequests();
     SessionId = RefreshedSessionId;
     SessionToken = RefreshedToken;
     SessionRegion = RefreshedRegion.IsEmpty() ? SessionRegion : RefreshedRegion;
@@ -264,6 +390,10 @@ void USPBackendSessionSubsystem::HandleSessionRefreshResponse(FHttpRequestPtr, F
 
 void USPBackendSessionSubsystem::ClearAuthenticatedSession()
 {
+    CancelAuthenticatedRequests();
+    SessionExpiryMonotonic = 0.0;
+    SessionExpiryUtc = FDateTime();
+    bSessionExpired = false;
     SessionId.Reset();
     SessionToken.Reset();
     SessionRegion.Reset();
@@ -304,12 +434,14 @@ void USPBackendSessionSubsystem::AllocateProtocolServer(const FString& Region, b
 
     if (!Request->ProcessRequest())
     {
+        ActiveAuthenticatedRequests.Remove(Request);
         OnRequestFailed.Broadcast(TEXT("allocation"), TEXT("Unable to start server allocation request."));
     }
 }
 
-void USPBackendSessionSubsystem::HandleAllocationResponse(FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
+void USPBackendSessionSubsystem::HandleAllocationResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful)
 {
+    if (!ConsumeAuthenticatedResponse(Request)) return;
     if (!bWasSuccessful || !Response.IsValid())
     {
         BroadcastHttpFailure(TEXT("allocation"), Response, bWasSuccessful);
@@ -469,12 +601,14 @@ void USPBackendSessionSubsystem::RequestReconnectTicket(const FString& MatchId, 
 
     if (!Request->ProcessRequest())
     {
+        ActiveAuthenticatedRequests.Remove(Request);
         OnRequestFailed.Broadcast(TEXT("reconnect-ticket"), TEXT("Unable to start reconnect ticket request."));
     }
 }
 
-void USPBackendSessionSubsystem::HandleReconnectTicketResponse(FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
+void USPBackendSessionSubsystem::HandleReconnectTicketResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful)
 {
+    if (!ConsumeAuthenticatedResponse(Request)) return;
     if (!bWasSuccessful || !Response.IsValid())
     {
         BroadcastHttpFailure(TEXT("reconnect-ticket"), Response, bWasSuccessful);
@@ -554,12 +688,14 @@ void USPBackendSessionSubsystem::ReconnectToReservedSlot(const FString& MatchId,
 
     if (!Request->ProcessRequest())
     {
+        ActiveAuthenticatedRequests.Remove(Request);
         OnRequestFailed.Broadcast(TEXT("reconnect"), TEXT("Unable to start reconnect request."));
     }
 }
 
-void USPBackendSessionSubsystem::HandleReconnectResponse(FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
+void USPBackendSessionSubsystem::HandleReconnectResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful)
 {
+    if (!ConsumeAuthenticatedResponse(Request)) return;
     if (!bWasSuccessful || !Response.IsValid())
     {
         BroadcastHttpFailure(TEXT("reconnect"), Response, bWasSuccessful);
@@ -626,6 +762,9 @@ void USPBackendSessionSubsystem::HandleReconnectResponse(FHttpRequestPtr, FHttpR
 
 void USPBackendSessionSubsystem::BroadcastHttpFailure(const FString& Context, FHttpResponsePtr Response, bool bWasSuccessful)
 {
+    if (Context != TEXT("compatibility") && Response.IsValid()
+        && (Response->GetResponseCode() == 401
+            || (Context == TEXT("session-refresh") && Response->GetResponseCode() == 403))) ExpireSession();
     FString Message;
     if (!bWasSuccessful)
     {

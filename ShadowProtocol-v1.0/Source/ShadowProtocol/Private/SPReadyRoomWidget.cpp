@@ -2,6 +2,8 @@
 #include "SPObserverPlayerController.h"
 #include "SPPlayerState.h"
 #include "SPProtocolGameState.h"
+#include "SPBackendSessionSubsystem.h"
+#include "Engine/GameInstance.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
 #include "Components/VerticalBox.h"
@@ -59,6 +61,10 @@ void USPReadyRoomWidget::RefreshReadyRoom()
             Team, *Player->SelectedSpawnGroup.ToString(), GS->ReadyPlayerCount, GS->ExpectedPlayerCount,
             GS->bAllPlayersReady ? TEXT("All players ready. Preparing match...") : TEXT("Waiting for all players to confirm."));
     }
+    const auto* Instance = GetGameInstance();
+    const auto* Backend = Instance ? Instance->GetSubsystem<USPBackendSessionSubsystem>() : nullptr;
+    if (Backend && Backend->HasExpiredSession())
+        Status += TEXT("\nBackend session expired. Sign in again before matchmaking or reconnect.");
     const FText NewText = FText::FromString(Status);
     if (!StatusText->GetText().EqualTo(NewText)) StatusText->SetText(NewText);
 }

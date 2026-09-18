@@ -139,3 +139,42 @@ test('native ready-room UI consumes replicated state without granting local read
   assert.match(controller, /FInputModeGameOnly/);
   assert.match(controller, /ReadyRoomWidget->RemoveFromParent\(\)/);
 });
+
+test('client session lifetime is checked using UTC and monotonic time', async () => {
+  const cpp = await source('../../Source/ShadowProtocol/Private/SPBackendSessionSubsystem.cpp');
+  const header = await source('../../Source/ShadowProtocol/Public/SPBackendSessionSubsystem.h');
+  assert.match(header, /HasAuthenticatedSession\(\) const \{ return GetSessionSecondsRemaining\(\) > 0.0f;/);
+  assert.match(cpp, /FDateTime::ParseIso8601/);
+  assert.match(cpp, /if \(Remaining <= 0.0\) return false/);
+  assert.match(cpp, /FMath::Min\(\(SessionExpiryUtc - FDateTime::UtcNow\(\)\).GetTotalSeconds\(\),\s*SessionExpiryMonotonic - FPlatformTime::Seconds\(\)\)/);
+  assert.match(cpp, /!SetSessionExpiry\(InExpiresAt\)/);
+  assert.match(cpp, /!SetSessionExpiry\(RefreshedExpiresAt\)/);
+  assert.match(cpp, /RemoveTicker\(ExpiryTicker\)/);
+  assert.match(cpp, /OnSessionExpired.Broadcast/);
+});
+
+test('authenticated callbacks cannot restore a cleared or replaced session', async () => {
+  const cpp = await source('../../Source/ShadowProtocol/Private/SPBackendSessionSubsystem.cpp');
+  for (const method of ['SessionRefresh', 'Allocation', 'ReconnectTicket', 'Reconnect']) {
+    const handler = cpp.split(`void USPBackendSessionSubsystem::Handle${method}Response(`)[1];
+    assert.ok(handler.trim().split('\n')[2].includes('ConsumeAuthenticatedResponse(Request)'), method);
+  }
+  assert.match(cpp, /ActiveAuthenticatedRequests.Remove\(Request\) == 0/);
+  assert.match(cpp, /Request->GetHeader\(TEXT\("Authorization"\)\) == TEXT\("Bearer "\) \+ SessionToken/);
+  assert.match(cpp, /ClearAuthenticatedSession\(\)\s*\{\s*CancelAuthenticatedRequests\(\)/);
+  assert.match(cpp, /OnProcessRequestComplete\(\).Unbind\(\);\s*Request->CancelRequest\(\)/);
+  assert.match(cpp, /if \(bRefreshPending\) return/);
+  assert.match(cpp, /Request->SetTimeout\(15.0f\)/);
+  assert.match(cpp, /if \(Request != CompatibilityRequest\) return/);
+});
+
+test('expiry UI and ticker handles use the intended Unreal contracts', async () => {
+  const widget = await source('../../Source/ShadowProtocol/Private/SPReadyRoomWidget.cpp');
+  assert.match(widget, /Backend->HasExpiredSession\(\)/);
+  for (const name of ['SPBackendSessionSubsystem', 'SPDedicatedServerBackendSubsystem']) {
+    const header = await source(`../../Source/ShadowProtocol/Public/${name}.h`);
+    assert.match(header, /#include "Containers\/Ticker.h"/);
+    assert.doesNotMatch(header, /(?<!::)\bFDelegateHandle\s+\w*Ticker\w*;/);
+    assert.match(header, /FTSTicker::FDelegateHandle/);
+  }
+});

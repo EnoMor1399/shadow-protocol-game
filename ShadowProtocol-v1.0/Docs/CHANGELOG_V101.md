@@ -208,3 +208,12 @@ See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flo
 - Recheck readiness during asynchronous OSS startup before preparation.
 - Extend Unreal source contracts to nine checks; UE/UHT and packaged runtime validation remain pending.
 - See `READY_ROOM_V101.md` for custom UMG hooks, test cases and remaining integration work.
+
+## Client session-expiry continuation
+
+- Enforce parsed future expiry with UTC and monotonic lifetime checks.
+- Add expiry event/status APIs and a native ready-room notice.
+- Cancel invalidated requests and ignore stale authenticated/compatibility callbacks.
+- Serialize token refresh with match requests; bound HTTP duration and preserve sessions on match-ownership 403.
+- Correct core ticker handle types for client expiry and server heartbeat/rotation.
+- Extend source checks to twelve; see `SESSION_EXPIRY_V101.md` for runtime gates.

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Http.h"
+#include "Containers/Ticker.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "SPBackendSessionSubsystem.generated.h"
 
@@ -100,6 +101,7 @@ struct FSPReconnectResult
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSPCompatibilityChecked, bool, bCompatible, FSPBackendCompatibility, Compatibility);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPAllocationCompleted, FSPMatchAllocation, Allocation);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPSessionExpired, FString, Reason);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSPSessionRefreshed, FString, SessionId, FString, ExpiresAt);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FSPReconnectTicketIssued, FString, ReconnectToken, FString, ReconnectDeadline, int32, GraceSeconds);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPReconnectCompleted, FSPReconnectResult, Result);
@@ -120,6 +122,17 @@ class SHADOWPROTOCOL_API USPBackendSessionSubsystem : public UGameInstanceSubsys
     GENERATED_BODY()
 
 public:
+    virtual void Initialize(FSubsystemCollectionBase& Collection) override;
+    virtual void Deinitialize() override;
+    UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Network")
+    FSPSessionExpired OnSessionExpired;
+
+    UFUNCTION(BlueprintPure, Category="Shadow Protocol|Network")
+    bool HasExpiredSession() const { return bSessionExpired; }
+
+    UFUNCTION(BlueprintPure, Category="Shadow Protocol|Network")
+    float GetSessionSecondsRemaining() const;
+
     UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Network")
     FSPCompatibilityChecked OnCompatibilityChecked;
 
@@ -160,7 +173,7 @@ public:
     void ClearAuthenticatedSession();
 
     UFUNCTION(BlueprintPure, Category="Shadow Protocol|Network")
-    bool HasAuthenticatedSession() const { return !SessionToken.IsEmpty(); }
+    bool HasAuthenticatedSession() const { return GetSessionSecondsRemaining() > 0.0f; }
 
     UFUNCTION(BlueprintPure, Category="Shadow Protocol|Network")
     bool HasVerifiedCompatibility() const { return bCompatibilityVerified; }
@@ -187,6 +200,18 @@ public:
     FSPBackendCompatibility GetLastCompatibility() const { return LastCompatibility; }
 
 private:
+    FTSTicker::FDelegateHandle ExpiryTicker;
+    FDateTime SessionExpiryUtc;
+    double SessionExpiryMonotonic = 0.0;
+    bool bSessionExpired = false;
+    bool bRefreshPending = false;
+    TArray<FHttpRequestPtr> ActiveAuthenticatedRequests;
+    FHttpRequestPtr CompatibilityRequest;
+    bool TickSessionExpiry(float DeltaSeconds);
+    bool SetSessionExpiry(const FString& ExpiresAt);
+    void ExpireSession();
+    bool ConsumeAuthenticatedResponse(FHttpRequestPtr Request);
+    void CancelAuthenticatedRequests();
     FString BackendBaseUrl = TEXT("http://127.0.0.1:8080");
     FString SessionId;
     FString SessionToken;

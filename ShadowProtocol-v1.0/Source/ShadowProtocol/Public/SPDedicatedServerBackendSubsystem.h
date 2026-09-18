@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Http.h"
+#include "Containers/Ticker.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "SPDedicatedServerBackendSubsystem.generated.h"
 
@@ -180,8 +181,8 @@ private:
     bool bRegistrationWasAttested = false;
     float HeartbeatIntervalSeconds = 10.0f;
     float CredentialRotationDelaySeconds = 0.0f;
-    FDelegateHandle HeartbeatTickerHandle;
-    FDelegateHandle CredentialRotationTickerHandle;
+    FTSTicker::FDelegateHandle HeartbeatTickerHandle;
+    FTSTicker::FDelegateHandle CredentialRotationTickerHandle;
 
     FString BuildUrl(const FString& Path) const;
     bool HasRequiredConfiguration() const;
