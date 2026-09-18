@@ -530,26 +530,54 @@ void USPDedicatedServerBackendSubsystem::AdmitConnection(const FString& Allocati
 
     const TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = CreateInfrastructureJsonRequest(TEXT("/v1/matches/admit"), TEXT("POST"));
     Request->SetContentAsString(SerializeJson(Payload));
-    Request->OnProcessRequestComplete().BindUObject(this, &USPDedicatedServerBackendSubsystem::HandleAdmissionResponse);
+    Request->OnProcessRequestComplete().BindUObject(
+        this,
+        &USPDedicatedServerBackendSubsystem::HandleAdmissionResponse,
+        AllocationId,
+        MatchId);
 
     if (!Request->ProcessRequest())
     {
-        OnRequestFailed.Broadcast(TEXT("connection-admission"), TEXT("Unable to start dedicated-server admission request."));
+        const FString Error = TEXT("Unable to start dedicated-server admission request.");
+        OnRequestFailed.Broadcast(TEXT("connection-admission"), Error);
+        OnAdmissionFailed.Broadcast(AllocationId, MatchId, Error);
     }
 }
 
-void USPDedicatedServerBackendSubsystem::HandleAdmissionResponse(FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
+void USPDedicatedServerBackendSubsystem::HandleAdmissionResponse(
+    FHttpRequestPtr,
+    FHttpResponsePtr Response,
+    bool bWasSuccessful,
+    FString AllocationId,
+    FString MatchId)
 {
     if (!bWasSuccessful || !Response.IsValid() || Response->GetResponseCode() < 200 || Response->GetResponseCode() >= 300)
     {
+        FString Error = TEXT("Backend admission request failed.");
+        if (bWasSuccessful && Response.IsValid())
+        {
+            Error = FString::Printf(TEXT("HTTP %d"), Response->GetResponseCode());
+            TSharedPtr<FJsonObject> ErrorObject;
+            if (ParseJsonObject(Response->GetContentAsString(), ErrorObject))
+            {
+                FString ErrorCode;
+                if (ErrorObject->TryGetStringField(TEXT("error"), ErrorCode) && !ErrorCode.IsEmpty())
+                {
+                    Error += TEXT(": ") + ErrorCode;
+                }
+            }
+        }
         BroadcastHttpFailure(TEXT("connection-admission"), Response, bWasSuccessful);
+        OnAdmissionFailed.Broadcast(AllocationId, MatchId, Error);
         return;
     }
 
     TSharedPtr<FJsonObject> JsonObject;
     if (!ParseJsonObject(Response->GetContentAsString(), JsonObject))
     {
-        OnRequestFailed.Broadcast(TEXT("connection-admission"), TEXT("Backend returned invalid admission JSON."));
+        const FString Error = TEXT("Backend returned invalid admission JSON.");
+        OnRequestFailed.Broadcast(TEXT("connection-admission"), Error);
+        OnAdmissionFailed.Broadcast(AllocationId, MatchId, Error);
         return;
     }
 
@@ -563,9 +591,15 @@ void USPDedicatedServerBackendSubsystem::HandleAdmissionResponse(FHttpRequestPtr
     JsonObject->TryGetStringField(TEXT("networkBuild"), Admission.NetworkBuild);
     JsonObject->TryGetStringField(TEXT("backendProtocol"), Admission.BackendProtocol);
 
-    if (!Admission.bAdmitted || Admission.ServerId != ServerId || Admission.NetworkBuild != USPBuildInfoLibrary::GetNetworkBuildId())
+    if (!Admission.bAdmitted
+        || Admission.AllocationId != AllocationId
+        || Admission.MatchId != MatchId
+        || Admission.ServerId != ServerId
+        || Admission.NetworkBuild != USPBuildInfoLibrary::GetNetworkBuildId())
     {
-        OnRequestFailed.Broadcast(TEXT("connection-admission"), TEXT("Admission response did not match this dedicated server/build."));
+        const FString Error = TEXT("Admission response did not match the pending allocation, match, dedicated server or network build.");
+        OnRequestFailed.Broadcast(TEXT("connection-admission"), Error);
+        OnAdmissionFailed.Broadcast(AllocationId, MatchId, Error);
         return;
     }
 

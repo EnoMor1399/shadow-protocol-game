@@ -2,6 +2,7 @@
 
 #include "SPBuildInfoLibrary.h"
 #include "Dom/JsonObject.h"
+#include "GameFramework/PlayerController.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -374,6 +375,73 @@ void USPBackendSessionSubsystem::HandleAllocationResponse(FHttpRequestPtr, FHttp
     }
 
     OnAllocationCompleted.Broadcast(Allocation);
+}
+
+FString USPBackendSessionSubsystem::BuildAllocationTravelUrl(const FSPMatchAllocation& Allocation) const
+{
+    FGuid AllocationGuid;
+    FGuid MatchGuid;
+    const auto IsSafeOption = [](const FString& Value)
+    {
+        if (Value.IsEmpty()) return false;
+        for (const TCHAR Character : Value)
+        {
+            if (!FChar::IsAlnum(Character)
+                && Character != TEXT('-')
+                && Character != TEXT('_')
+                && Character != TEXT('.'))
+            {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    if (!FGuid::Parse(Allocation.AllocationId, AllocationGuid)
+        || !FGuid::Parse(Allocation.MatchId, MatchGuid)
+        || Allocation.ConnectHost.IsEmpty()
+        || Allocation.ConnectPort < 1
+        || Allocation.ConnectPort > 65535
+        || Allocation.ConnectToken.Len() < 24
+        || !IsSafeOption(Allocation.ConnectToken)
+        || !IsSafeOption(Allocation.ServerId)
+        || !IsSafeOption(Allocation.NetworkBuild))
+    {
+        return FString();
+    }
+
+    FString Host = Allocation.ConnectHost.TrimStartAndEnd();
+    if (Host.Contains(TEXT(":")) && !Host.StartsWith(TEXT("[")) && !Host.EndsWith(TEXT("]")))
+    {
+        Host = TEXT("[") + Host + TEXT("]");
+    }
+
+    return FString::Printf(
+        TEXT("%s:%d?spAllocationId=%s?spMatchId=%s?spConnectToken=%s?spServerId=%s?spNetworkBuild=%s"),
+        *Host,
+        Allocation.ConnectPort,
+        *Allocation.AllocationId,
+        *Allocation.MatchId,
+        *Allocation.ConnectToken,
+        *Allocation.ServerId,
+        *Allocation.NetworkBuild);
+}
+
+bool USPBackendSessionSubsystem::ConnectToAllocation(APlayerController* PlayerController, const FSPMatchAllocation& Allocation) const
+{
+    if (!PlayerController || !PlayerController->IsLocalController())
+    {
+        return false;
+    }
+
+    const FString TravelUrl = BuildAllocationTravelUrl(Allocation);
+    if (TravelUrl.IsEmpty())
+    {
+        return false;
+    }
+
+    PlayerController->ClientTravel(TravelUrl, TRAVEL_Absolute);
+    return true;
 }
 
 void USPBackendSessionSubsystem::RequestReconnectTicket(const FString& MatchId, int32 RoundNumber, int32 SlotIndex)

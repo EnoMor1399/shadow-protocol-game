@@ -77,6 +77,7 @@ struct FSPDedicatedServerAdmission
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPDedicatedServerRegistered, FSPDedicatedServerRegistration, Registration);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FSPDedicatedServerHeartbeat, FString, ServerId, FString, Status, int32, ActiveAllocations);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPDedicatedServerAdmissionCompleted, FSPDedicatedServerAdmission, Admission);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FSPDedicatedServerAdmissionFailed, FString, AllocationId, FString, MatchId, FString, ErrorMessage);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FSPDedicatedServerAllocationReleased, FString, AllocationId, FString, MatchId, FString, Status, int32, ActiveAllocations);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPDedicatedServerDrainChanged, bool, bDraining);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPDedicatedServerCredentialRotated, FString, CredentialExpiresAt);
@@ -109,6 +110,9 @@ public:
 
     UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Dedicated Server")
     FSPDedicatedServerAdmissionCompleted OnAdmissionCompleted;
+
+    UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Dedicated Server")
+    FSPDedicatedServerAdmissionFailed OnAdmissionFailed;
 
     UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Dedicated Server")
     FSPDedicatedServerAllocationReleased OnAllocationReleased;
@@ -195,7 +199,7 @@ private:
     void HandleHeartbeatResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void HandleCredentialRotationResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void HandleDrainResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
-    void HandleAdmissionResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+    void HandleAdmissionResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, FString AllocationId, FString MatchId);
     void HandleReleaseResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void BroadcastHttpFailure(const FString& Context, FHttpResponsePtr Response, bool bWasSuccessful);
 };

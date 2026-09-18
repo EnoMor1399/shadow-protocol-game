@@ -6,6 +6,7 @@
 #include "SPBackendSessionSubsystem.generated.h"
 
 class FJsonObject;
+class APlayerController;
 
 USTRUCT(BlueprintType)
 struct FSPBackendCompatibility
@@ -169,6 +170,12 @@ public:
 
     UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
     void AllocateProtocolServer(const FString& Region, bool bRanked = true);
+
+    UFUNCTION(BlueprintPure, Category="Shadow Protocol|Network")
+    FString BuildAllocationTravelUrl(const FSPMatchAllocation& Allocation) const;
+
+    UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
+    bool ConnectToAllocation(APlayerController* PlayerController, const FSPMatchAllocation& Allocation) const;
 
     UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
     void RequestReconnectTicket(const FString& MatchId, int32 RoundNumber, int32 SlotIndex);
