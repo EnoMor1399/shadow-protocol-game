@@ -95,7 +95,11 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
         BindingKey->SetEscapeKeys(TArray<FKey>{EKeys::Escape});
         BindingKey->OnKeySelected.AddUniqueDynamic(this, &USPControlsWidget::CaptureBinding);
         Column->AddChildToVerticalBox(BindingKey)->SetPadding(FMargin(0, 8));
-        BindingFeedback = Label(TEXT("Single keys only. Conflicting bindings are kept unchanged."), 16, FLinearColor::White);
+        BindingFeedback = Label(TEXT("Single keys only. Conflicts can be reviewed and swapped safely."), 16, FLinearColor::White);
+        ConfirmSwapButton = Button(TEXT("Confirm key swap"));
+        ConfirmSwapButton->SetIsEnabled(false);
+        ConfirmSwapText = Cast<UTextBlock>(ConfirmSwapButton->GetContent());
+        ConfirmSwapButton->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ConfirmPendingSwap);
         auto* Restore = Button(TEXT("Restore original action bindings"));
         Restore->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ResetBindings);
         // Only list implemented pawn controls. Config-only actions are not advertised.
@@ -161,6 +165,7 @@ void USPControlsWidget::ResetDefaults()
 }
 void USPControlsWidget::CloseControls()
 {
+    ClearPendingSwap();
     if (auto* PC = GetOwningPlayer<ASPObserverPlayerController>()) PC->ToggleControls();
 }
 FReply USPControlsWidget::NativeOnPreviewKeyDown(const FGeometry& Geometry, const FKeyEvent& Event)
@@ -177,6 +182,7 @@ FReply USPControlsWidget::NativeOnPreviewKeyDown(const FGeometry& Geometry, cons
 
 void USPControlsWidget::ChooseBindingAction(FString Selection, ESelectInfo::Type SelectionType)
 {
+    ClearPendingSwap();
     RefreshBindings();
 }
 
@@ -213,22 +219,89 @@ void USPControlsWidget::RefreshBindings()
 void USPControlsWidget::CaptureBinding(FInputChord Chord)
 {
     if (bSynchronizingBinding) return;
+    ClearPendingSwap();
+
     const FName* Action = ActionNames.Find(BindingAction->GetSelectedOption());
     FString Error;
     if (!Action || Chord.bShift || Chord.bCtrl || Chord.bAlt || Chord.bCmd)
+    {
         Error = TEXT("Choose a single key without a modifier combination.");
+    }
     else
     {
         if (auto* PC = GetOwningPlayer<ASPObserverPlayerController>())
             if (auto* Character = Cast<ASPCharacter>(PC->GetPawn())) Character->ReleaseHeldControls();
-        GetMutableDefault<USPControlSettings>()->RebindAction(*Action, Chord.Key, Error);
+
+        auto* Settings = GetMutableDefault<USPControlSettings>();
+        FName ConflictAction;
+        if (Settings->FindActionUsingKey(Chord.Key, *Action, ConflictAction))
+        {
+            PendingSwapAction = *Action;
+            PendingConflictAction = ConflictAction;
+            PendingSwapKey = Chord.Key;
+            if (ConfirmSwapButton) ConfirmSwapButton->SetIsEnabled(true);
+            if (ConfirmSwapText)
+            {
+                ConfirmSwapText->SetText(FText::FromString(FString::Printf(
+                    TEXT("Swap %s with %s"),
+                    *PendingSwapAction.ToString(),
+                    *PendingConflictAction.ToString())));
+            }
+            Error = FString::Printf(
+                TEXT("%s is assigned to %s. Confirm the swap to exchange their current keys without leaving either action unbound."),
+                *Chord.Key.GetDisplayName().ToString(),
+                *ConflictAction.ToString());
+        }
+        else
+        {
+            Settings->RebindAction(*Action, Chord.Key, Error);
+        }
     }
+
     BindingFeedback->SetText(FText::FromString(Error.IsEmpty() ? TEXT("Binding applied and saved.") : Error));
     RefreshBindings();
 }
 
+void USPControlsWidget::ConfirmPendingSwap()
+{
+    if (PendingSwapAction.IsNone() || PendingConflictAction.IsNone() || !PendingSwapKey.IsValid())
+    {
+        ClearPendingSwap();
+        return;
+    }
+
+    if (auto* PC = GetOwningPlayer<ASPObserverPlayerController>())
+        if (auto* Character = Cast<ASPCharacter>(PC->GetPawn())) Character->ReleaseHeldControls();
+
+    FString Error;
+    const FString SwapSummary = FString::Printf(
+        TEXT("%s and %s swapped and saved."),
+        *PendingSwapAction.ToString(),
+        *PendingConflictAction.ToString());
+
+    const bool bSwapped = GetMutableDefault<USPControlSettings>()->SwapActionBinding(
+        PendingSwapAction,
+        PendingConflictAction,
+        PendingSwapKey,
+        Error);
+
+    ClearPendingSwap();
+    BindingFeedback->SetText(FText::FromString(bSwapped ? SwapSummary : Error));
+    RefreshBindings();
+}
+
+void USPControlsWidget::ClearPendingSwap()
+{
+    PendingSwapAction = NAME_None;
+    PendingConflictAction = NAME_None;
+    PendingSwapKey = FKey();
+    if (ConfirmSwapButton) ConfirmSwapButton->SetIsEnabled(false);
+    if (ConfirmSwapText) ConfirmSwapText->SetText(FText::FromString(TEXT("Confirm key swap")));
+}
+
 void USPControlsWidget::ResetBindings()
 {
+    ClearPendingSwap();
     GetMutableDefault<USPControlSettings>()->ResetActionBindings();
     BindingFeedback->SetText(FText::FromString(TEXT("Original action bindings restored. Mouse settings unchanged.")));
     RefreshBindings();

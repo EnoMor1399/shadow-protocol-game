@@ -77,6 +77,76 @@ bool USPControlSettings::RebindAction(FName Action, FKey Key, FString& Error)
     return true;
 }
 
+bool USPControlSettings::FindActionUsingKey(FKey Key, FName ExcludingAction, FName& OutAction) const
+{
+    OutAction = NAME_None;
+    if (!Key.IsValid()) return false;
+
+    const auto* Input = GetDefault<UInputSettings>();
+    for (const auto& Mapping : Input->GetActionMappings())
+    {
+        if (Mapping.Key == Key
+            && Mapping.ActionName != ExcludingAction
+            && !Mapping.Key.IsGamepadKey()
+            && CanRebindAction(Mapping.ActionName))
+        {
+            OutAction = Mapping.ActionName;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool USPControlSettings::SwapActionBinding(FName Action, FName ConflictingAction, FKey NewKey, FString& Error)
+{
+    if (!CanRebindAction(Action) || !CanRebindAction(ConflictingAction) || Action == ConflictingAction)
+    {
+        Error = TEXT("That binding cannot be swapped.");
+        return false;
+    }
+
+    FName CurrentOwner;
+    if (!FindActionUsingKey(NewKey, Action, CurrentOwner) || CurrentOwner != ConflictingAction)
+    {
+        Error = TEXT("The binding changed before the swap could be confirmed. Review the current controls and try again.");
+        return false;
+    }
+
+    const auto* Input = GetDefault<UInputSettings>();
+    FKey PreviousActionKey;
+    for (const auto& Mapping : Input->GetActionMappings())
+    {
+        if (Mapping.ActionName == Action && !Mapping.Key.IsGamepadKey())
+        {
+            PreviousActionKey = Mapping.Key;
+            break;
+        }
+    }
+
+    if (!PreviousActionKey.IsValid() || PreviousActionKey == NewKey)
+    {
+        Error = TEXT("The selected action does not have a swappable keyboard or mouse binding.");
+        return false;
+    }
+
+    const auto PreviousOverrides = ActionOverrides;
+    ActionOverrides.RemoveAll([&](const FInputActionKeyMapping& Mapping)
+        { return Mapping.ActionName == Action || Mapping.ActionName == ConflictingAction; });
+    ActionOverrides.Add(FInputActionKeyMapping(Action, NewKey));
+    ActionOverrides.Add(FInputActionKeyMapping(ConflictingAction, PreviousActionKey));
+
+    if (!ApplyActionOverrides(Error))
+    {
+        ActionOverrides = PreviousOverrides;
+        return false;
+    }
+
+    SaveConfig();
+    Error.Reset();
+    return true;
+}
+
 void USPControlSettings::ResetActionBindings()
 {
     ActionOverrides.Reset();

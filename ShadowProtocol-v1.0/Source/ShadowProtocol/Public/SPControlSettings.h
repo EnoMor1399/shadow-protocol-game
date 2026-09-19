@@ -15,6 +15,8 @@ public:
     UPROPERTY(Config) TArray<FInputActionKeyMapping> ActionOverrides;
     bool ApplyActionOverrides(FString& Error);
     bool RebindAction(FName Action, FKey Key, FString& Error);
+    bool FindActionUsingKey(FKey Key, FName ExcludingAction, FName& OutAction) const;
+    bool SwapActionBinding(FName Action, FName ConflictingAction, FKey NewKey, FString& Error);
     void ResetActionBindings();
     static bool CanRebindAction(FName Action);
 };

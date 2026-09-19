@@ -31,6 +31,21 @@ bool FSPRebindingTest::RunTest(const FString& Parameters)
     Settings->ActionOverrides.Add(FInputActionKeyMapping(TEXT("Aim"), EKeys::R));
     TestFalse(TEXT("Duplicate assignments are rejected"), Settings->ApplyActionOverrides(Error));
     TestTrue(TEXT("Invalid batch preserves the previous valid batch"), Swapped == Input->GetActionMappings());
+
+    Settings->ActionOverrides = {FInputActionKeyMapping(TEXT("Reload"), EKeys::F12)};
+    TestTrue(TEXT("Reload can be staged on F12 before swap validation"), Settings->ApplyActionOverrides(Error));
+    FName Conflict;
+    TestTrue(TEXT("Conflict lookup identifies Fire on left mouse"), Settings->FindActionUsingKey(EKeys::LeftMouseButton, TEXT("Reload"), Conflict));
+    TestEqual(TEXT("Conflict lookup returns Fire"), Conflict, FName(TEXT("Fire")));
+    TestTrue(TEXT("Confirmed swap moves Reload to Fire's key atomically"), Settings->SwapActionBinding(TEXT("Reload"), TEXT("Fire"), EKeys::LeftMouseButton, Error));
+    const auto AfterConfirmedSwap = Input->GetActionMappings();
+    TestTrue(TEXT("Reload receives left mouse after swap"), AfterConfirmedSwap.Contains(FInputActionKeyMapping(TEXT("Reload"), EKeys::LeftMouseButton)));
+    TestTrue(TEXT("Fire receives Reload's previous F12 key after swap"), AfterConfirmedSwap.Contains(FInputActionKeyMapping(TEXT("Fire"), EKeys::F12)));
+
+    const auto StableAfterSwap = Input->GetActionMappings();
+    TestFalse(TEXT("Stale conflict confirmation is rejected"), Settings->SwapActionBinding(TEXT("Aim"), TEXT("Fire"), EKeys::LeftMouseButton, Error));
+    TestTrue(TEXT("Rejected stale swap preserves bindings"), StableAfterSwap == Input->GetActionMappings());
+
     const auto Current = Input->GetActionMappings();
     for (const auto& Mapping : Current) Input->RemoveActionMapping(Mapping, false);
     for (const auto& Mapping : Before) Input->AddActionMapping(Mapping, false);
