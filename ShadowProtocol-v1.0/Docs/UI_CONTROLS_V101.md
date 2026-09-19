@@ -56,3 +56,27 @@ Required UE5.6 checks (engine unavailable in this workspace):
 6. Change sensitivity/invert, restart and check persistence. Reset and restart.
 7. Test downed/eliminated players, possession changes and travel while menus
    are open. Inspect Blueprint pawn subclasses for camera overrides before shipping.
+
+## Ready-room spawn selection and feedback
+
+The owning controller receives only the server-filtered spawn group names for its
+admitted team during editable planning. A native dropdown submits the selected
+name through the existing authoritative GameMode validation. Changing the spawn
+still clears readiness. The UI never sets replicated player state locally.
+Configure GameMode `SpawnGroups` and corresponding tagged PlayerStarts in the map;
+no choices are fabricated for an unconfigured map. Empty/unavailable choices leave
+the dropdown disabled, with explanatory text.
+
+Ready/spawn requests allow one outstanding operation, retain local/server rate
+limits, and return an owning-client acknowledgement with a matching request ID.
+Controls disable while awaiting confirmation. A four-second timeout reports that
+confirmation is unknown, allowing a retry; late acknowledgements cannot overwrite
+a newer request's status. Replicated state remains the source of truth. The server
+still validates every mutation even if displayed choices are stale. Choice lists
+refresh server-side every 250 ms, including team, phase and service-health changes.
+
+Additional UE checks: two clients on different teams see only eligible groups;
+selecting a different spawn clears readiness; rejected/stale choices do not mutate
+state; keyboard dropdown navigation does not trigger requests during replication;
+delayed, dropped and reordered acknowledgements leave controls recoverable. Source
+checks cover the wiring; engine/UHT and packaged UI verification remain pending.

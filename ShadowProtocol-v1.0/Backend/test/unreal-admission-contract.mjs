@@ -101,12 +101,12 @@ test('late admissions cannot bypass timeout, provider loss or dedicated identity
 test('ready-room RPCs derive identity from their owning controller', async () => {
   const header = await source('../../Source/ShadowProtocol/Public/SPObserverPlayerController.h');
   const controller = await source('../../Source/ShadowProtocol/Private/SPObserverPlayerController.cpp');
-  assert.match(header, /UFUNCTION\(Server, Reliable\) void ServerSetReadyState\(bool bReady\)/);
-  assert.match(header, /UFUNCTION\(Server, Reliable\) void ServerSelectSpawnGroup\(FName SpawnGroupId\)/);
+  assert.match(header, /UFUNCTION\(Server, Reliable\) void ServerSetReadyState\(bool bReady, int32 RequestId\)/);
+  assert.match(header, /UFUNCTION\(Server, Reliable\) void ServerSelectSpawnGroup\(FName SpawnGroupId, int32 RequestId\)/);
   assert.match(controller, /Mode->SetPlayerReady\(GetPlayerState<ASPPlayerState>\(\), bReady\)/);
   assert.match(controller, /Mode->SelectSpawnGroup\(GetPlayerState<ASPPlayerState>\(\), SpawnGroupId\)/);
   assert.match(controller, /Now < NextReadyRoomRequestSeconds/);
-  assert.equal((controller.match(/if \(!ConsumeReadyRoomRequest\(\)\) return;/g) || []).length, 2);
+  assert.equal((controller.match(/if \(!ConsumeReadyRoomRequest\(\)\)/g) || []).length, 2);
   assert.doesNotMatch(header, /Server(?:SetReadyState|SelectSpawnGroup)\([^)]*(?:PlayerState|UserId|SessionId)/);
 });
 
@@ -249,4 +249,22 @@ test('combat HUD reads live replicated state and hides behind modal UI', async (
   for (const state of ['RoundTimeRemaining', 'AmmoInMagazine', 'Health', 'Stamina', 'SelectedEquipment']) assert.ok(hud.includes(state));
   assert.doesNotMatch(hud, /Server[A-Za-z]+\(/);
   assert.match(hud, /NO WEAPON EQUIPPED/);
+});
+
+
+test('spawn selector is owner-scoped, server filtered and request correlated', async () => {
+  const mode = await source('../../Source/ShadowProtocol/Private/SPProtocolGameMode.cpp');
+  const controller = await source('../../Source/ShadowProtocol/Private/SPObserverPlayerController.cpp');
+  const widget = await source('../../Source/ShadowProtocol/Private/SPReadyRoomWidget.cpp');
+  const choices = mode.split('TArray<FName> ASPProtocolGameMode::GetReadyRoomSpawnGroups')[1].split('bool ASPProtocolGameMode::SetPlayerReady')[0];
+  assert.match(choices, /CanEditReadyRoom\(Player\)/);
+  assert.match(choices, /Group.Team == Player->Team/);
+  assert.match(choices, /AddUnique/);
+  assert.match(controller, /AvailableSpawnGroups,COND_OwnerOnly/);
+  assert.match(controller, /RequestId != PendingReadyRoomRequestId/);
+  assert.match(controller, /FPlatformTime::Seconds\(\) >= ReadyRoomRequestDeadline/);
+  assert.match(widget, /bSynchronizingSpawnChoice \|\| SelectionType == ESelectInfo::Direct/);
+  assert.match(widget, /!Controller->IsReadyRoomRequestPending\(\)/);
+  assert.match(widget, /PC->RequestSpawnGroup\(Group\)/);
+  assert.doesNotMatch(widget, /Player->SelectedSpawnGroup\s*=/);
 });

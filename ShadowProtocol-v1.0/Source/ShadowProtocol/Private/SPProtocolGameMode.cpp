@@ -655,6 +655,16 @@ bool ASPProtocolGameMode::CanEditReadyRoom(const ASPPlayerState* Player) const
     return true;
 }
 
+TArray<FName> ASPProtocolGameMode::GetReadyRoomSpawnGroups(const ASPPlayerState* Player) const
+{
+    TArray<FName> Choices;
+    if (!CanEditReadyRoom(Player)) return Choices;
+    for (const auto& Group : SpawnGroups)
+        if (!Group.GroupId.IsNone() && (Group.Team == ESPTeam::None || Group.Team == Player->Team))
+            Choices.AddUnique(Group.GroupId);
+    return Choices;
+}
+
 bool ASPProtocolGameMode::SetPlayerReady(ASPPlayerState* Player,bool bReady)
 {
     if (!CanEditReadyRoom(Player)) return false;

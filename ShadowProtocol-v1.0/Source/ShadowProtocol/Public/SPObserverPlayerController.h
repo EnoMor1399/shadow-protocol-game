@@ -15,6 +15,9 @@ public:
     UPROPERTY(Replicated, BlueprintReadOnly, Category="Observer") int32 ObserverTargetIndex = 0;
     UFUNCTION(BlueprintCallable, Server, Reliable) void ServerCycleObserverTarget(int32 Direction);
     UFUNCTION(BlueprintCallable, Server, Reliable) void ServerSetFreeObserverCamera(bool bEnabled);
+    UPROPERTY(Replicated, BlueprintReadOnly, Category="Ready Room") TArray<FName> AvailableSpawnGroups;
+    UFUNCTION(BlueprintPure, Category="Ready Room") bool IsReadyRoomRequestPending() const { return PendingReadyRoomRequestId != 0; }
+    UFUNCTION(BlueprintPure, Category="Ready Room") FString GetReadyRoomFeedback() const { return ReadyRoomFeedback; }
     UPROPERTY(EditDefaultsOnly, Category="Ready Room") bool bShowNativeReadyRoom = true;
     UFUNCTION(BlueprintCallable, Category="Ready Room") void RequestReadyState(bool bReady);
     UFUNCTION(BlueprintCallable, Category="Ready Room") void RequestSpawnGroup(FName SpawnGroupId);
@@ -30,9 +33,16 @@ protected:
     virtual void BeginPlay() override;
     virtual void PlayerTick(float DeltaTime) override;
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
-    UFUNCTION(Server, Reliable) void ServerSetReadyState(bool bReady);
-    UFUNCTION(Server, Reliable) void ServerSelectSpawnGroup(FName SpawnGroupId);
+    UFUNCTION(Server, Reliable) void ServerSetReadyState(bool bReady, int32 RequestId);
+    UFUNCTION(Server, Reliable) void ServerSelectSpawnGroup(FName SpawnGroupId, int32 RequestId);
     bool ConsumeReadyRoomRequest();
+    bool BeginReadyRoomRequest();
+    UFUNCTION(Client, Reliable) void ClientReadyRoomResult(int32 RequestId, bool bAccepted, const FString& Message);
+    int32 ReadyRoomRequestSequence = 0;
+    int32 PendingReadyRoomRequestId = 0;
+    double ReadyRoomRequestDeadline = 0.0;
+    float SpawnChoicesRefreshRemaining = 0.f;
+    FString ReadyRoomFeedback;
     UPROPERTY(Transient) TObjectPtr<USPReadyRoomWidget> ReadyRoomWidget;
     double NextReadyRoomRequestSeconds = 0.0;
     double NextLocalReadyRoomRequestSeconds = 0.0;

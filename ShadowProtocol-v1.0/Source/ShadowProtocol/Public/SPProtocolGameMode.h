@@ -56,6 +56,7 @@ public:
     UFUNCTION(BlueprintCallable) void CompleteExtraction(ASPPlayerState* Player);
     void ApplyIntelligenceEffect(ESPIntelType Type, FName EffectTag, ASPPlayerState* Player);
     UFUNCTION(BlueprintCallable) void EvaluateEliminationWin();
+    TArray<FName> GetReadyRoomSpawnGroups(const ASPPlayerState* Player) const;
     UFUNCTION(BlueprintCallable) bool SetPlayerReady(ASPPlayerState* Player, bool bReady);
     UFUNCTION(BlueprintCallable) bool SelectSpawnGroup(ASPPlayerState* Player, FName SpawnGroupId);
     UFUNCTION(BlueprintPure) bool CanStartCompetitiveMatch() const;

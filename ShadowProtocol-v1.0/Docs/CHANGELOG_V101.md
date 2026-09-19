@@ -248,3 +248,10 @@ See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flo
 - Release held actions across menu transitions, preserve input-ignore pairing, fix overlapping lean keys and crouch/sprint state.
 - Add a native first-person camera and enable crouch movement.
 - Add compiled lean-state regression checks; UE rendering/build verification remains pending (UI_CONTROLS_V101.md).
+
+## Ready-room spawn selection
+
+- Add team-filtered, owner-only spawn choices and a native dropdown.
+- Add correlated server confirmation/rejection and bounded pending UI for ready/spawn requests.
+- Keep authoritative validation and clear readiness when spawn selection changes.
+- Document unconfigured-map and network-delay behavior in UI_CONTROLS_V101.md.

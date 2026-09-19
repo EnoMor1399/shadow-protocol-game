@@ -41,6 +41,7 @@ void ASPObserverPlayerController::GetLifetimeReplicatedProps(TArray<FLifetimePro
     Super::GetLifetimeReplicatedProps(OutLifetimeProps);
     DOREPLIFETIME(ASPObserverPlayerController,bFreeObserverCamera);
     DOREPLIFETIME(ASPObserverPlayerController,ObserverTargetIndex);
+    DOREPLIFETIME_CONDITION(ASPObserverPlayerController,AvailableSpawnGroups,COND_OwnerOnly);
 }
 
 void ASPObserverPlayerController::BeginPlay()
@@ -63,6 +64,22 @@ void ASPObserverPlayerController::BeginPlay()
 void ASPObserverPlayerController::PlayerTick(float DeltaTime)
 {
     Super::PlayerTick(DeltaTime);
+    if (HasAuthority())
+    {
+        SpawnChoicesRefreshRemaining -= DeltaTime;
+        if (SpawnChoicesRefreshRemaining <= 0.f)
+        {
+            SpawnChoicesRefreshRemaining = 0.25f;
+            const auto* Mode = GetWorld()->GetAuthGameMode<ASPProtocolGameMode>();
+            const TArray<FName> Choices = Mode ? Mode->GetReadyRoomSpawnGroups(GetPlayerState<ASPPlayerState>()) : TArray<FName>();
+            if (Choices != AvailableSpawnGroups) { AvailableSpawnGroups = Choices; ForceNetUpdate(); }
+        }
+    }
+    if (IsLocalController() && PendingReadyRoomRequestId != 0 && FPlatformTime::Seconds() >= ReadyRoomRequestDeadline)
+    {
+        PendingReadyRoomRequestId = 0;
+        ReadyRoomFeedback = TEXT("No confirmation received. Check your current selection before retrying.");
+    }
     if (!IsLocalController()) return;
     const auto* GS = GetWorld()->GetGameState<ASPProtocolGameState>();
     const bool bShow = ReadyRoomWidget && GS && !GS->bMatchComplete && GS->MatchPhase == ESPMatchPhase::Planning;
@@ -93,20 +110,33 @@ void ASPObserverPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReas
     Super::EndPlay(EndPlayReason);
 }
 
-void ASPObserverPlayerController::RequestReadyState(bool bReady)
+bool ASPObserverPlayerController::BeginReadyRoomRequest()
 {
     const double Now = FPlatformTime::Seconds();
-    if (!IsLocalController() || Now < NextLocalReadyRoomRequestSeconds) return;
+    if (!IsLocalController() || PendingReadyRoomRequestId != 0 || Now < NextLocalReadyRoomRequestSeconds) return false;
     NextLocalReadyRoomRequestSeconds = Now + 0.2;
-    ServerSetReadyState(bReady);
+    ReadyRoomRequestSequence = ReadyRoomRequestSequence == MAX_int32 ? 1 : ReadyRoomRequestSequence + 1;
+    PendingReadyRoomRequestId = ReadyRoomRequestSequence;
+    ReadyRoomRequestDeadline = Now + 4.0;
+    ReadyRoomFeedback = TEXT("Waiting for server confirmation...");
+    return true;
+}
+
+void ASPObserverPlayerController::RequestReadyState(bool bReady)
+{
+    if (BeginReadyRoomRequest()) ServerSetReadyState(bReady, PendingReadyRoomRequestId);
 }
 
 void ASPObserverPlayerController::RequestSpawnGroup(FName SpawnGroupId)
 {
-    const double Now = FPlatformTime::Seconds();
-    if (!IsLocalController() || Now < NextLocalReadyRoomRequestSeconds) return;
-    NextLocalReadyRoomRequestSeconds = Now + 0.2;
-    ServerSelectSpawnGroup(SpawnGroupId);
+    if (BeginReadyRoomRequest()) ServerSelectSpawnGroup(SpawnGroupId, PendingReadyRoomRequestId);
+}
+
+void ASPObserverPlayerController::ClientReadyRoomResult_Implementation(int32 RequestId, bool bAccepted, const FString& Message)
+{
+    if (RequestId != PendingReadyRoomRequestId || RequestId == 0) return;
+    PendingReadyRoomRequestId = 0;
+    ReadyRoomFeedback = (bAccepted ? TEXT("") : TEXT("Not applied: ")) + Message;
 }
 
 bool ASPObserverPlayerController::ConsumeReadyRoomRequest()
@@ -117,18 +147,23 @@ bool ASPObserverPlayerController::ConsumeReadyRoomRequest()
     return true;
 }
 
-void ASPObserverPlayerController::ServerSetReadyState_Implementation(bool bReady)
+void ASPObserverPlayerController::ServerSetReadyState_Implementation(bool bReady, int32 RequestId)
 {
-    if (!ConsumeReadyRoomRequest()) return;
-    if (auto* Mode = GetWorld()->GetAuthGameMode<ASPProtocolGameMode>())
-        Mode->SetPlayerReady(GetPlayerState<ASPPlayerState>(), bReady);
+    if (!ConsumeReadyRoomRequest()) { ClientReadyRoomResult(RequestId, false, TEXT("Please wait before trying again.")); return; }
+    auto* Mode = GetWorld()->GetAuthGameMode<ASPProtocolGameMode>();
+    const bool bAccepted = Mode && Mode->SetPlayerReady(GetPlayerState<ASPPlayerState>(), bReady);
+    ClientReadyRoomResult(RequestId, bAccepted, bAccepted
+        ? (bReady ? TEXT("Ready confirmed.") : TEXT("Ready cancelled."))
+        : TEXT("Readiness cannot change right now. Check admission and match phase."));
 }
 
-void ASPObserverPlayerController::ServerSelectSpawnGroup_Implementation(FName SpawnGroupId)
+void ASPObserverPlayerController::ServerSelectSpawnGroup_Implementation(FName SpawnGroupId, int32 RequestId)
 {
-    if (!ConsumeReadyRoomRequest()) return;
-    if (auto* Mode = GetWorld()->GetAuthGameMode<ASPProtocolGameMode>())
-        Mode->SelectSpawnGroup(GetPlayerState<ASPPlayerState>(), SpawnGroupId);
+    if (!ConsumeReadyRoomRequest()) { ClientReadyRoomResult(RequestId, false, TEXT("Please wait before trying again.")); return; }
+    auto* Mode = GetWorld()->GetAuthGameMode<ASPProtocolGameMode>();
+    const bool bAccepted = Mode && Mode->SelectSpawnGroup(GetPlayerState<ASPPlayerState>(), SpawnGroupId);
+    ClientReadyRoomResult(RequestId, bAccepted, bAccepted ? TEXT("Spawn selection confirmed. Check readiness before deployment.")
+        : TEXT("That spawn is unavailable for your team or the planning phase has ended."));
 }
 
 void ASPObserverPlayerController::SetMouseSensitivity(float Value)

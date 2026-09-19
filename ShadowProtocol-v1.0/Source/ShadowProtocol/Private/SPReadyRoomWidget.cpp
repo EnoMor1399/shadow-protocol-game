@@ -45,6 +45,16 @@ TSharedRef<SWidget> USPReadyRoomWidget::RebuildWidget()
         StatusText->SetJustification(ETextJustify::Left);
         StatusText->SetAutoWrapText(true);
         Column->AddChildToVerticalBox(StatusText)->SetPadding(FMargin(0, 12));
+        auto* SpawnLabel = WidgetTree->ConstructWidget<UTextBlock>();
+        SpawnLabel->SetText(FText::FromString(TEXT("DEPLOYMENT SPAWN / Changing spawn clears readiness")));
+        SpawnLabel->SetAutoWrapText(true);
+        Column->AddChildToVerticalBox(SpawnLabel)->SetPadding(FMargin(0, 12));
+        SpawnChoice = WidgetTree->ConstructWidget<UComboBoxString>();
+        SpawnChoice->OnSelectionChanged.AddUniqueDynamic(this, &USPReadyRoomWidget::SelectSpawn);
+        Column->AddChildToVerticalBox(SpawnChoice)->SetPadding(FMargin(0, 8));
+        FeedbackText = WidgetTree->ConstructWidget<UTextBlock>();
+        FeedbackText->SetAutoWrapText(true);
+        Column->AddChildToVerticalBox(FeedbackText)->SetPadding(FMargin(0, 8));
         ReadyButton = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), TEXT("ReadyButton"));
         ButtonText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("ReadyLabel"));
         FSlateFontInfo ButtonFont = ButtonText->GetFont();
@@ -80,8 +90,35 @@ void USPReadyRoomWidget::RefreshReadyRoom()
     const bool bAdmitted = Player && Player->bSessionAuthenticated
         && Player->ConnectionState == ESPConnectionState::Connected && Player->Team != ESPTeam::None;
     const bool bEditable = bAdmitted && GS && !GS->bMatchComplete
-        && GS->MatchPhase == ESPMatchPhase::Planning && GS->RoundState == ESPRoundState::Waiting;
+        && GS->MatchPhase == ESPMatchPhase::Planning && GS->RoundState == ESPRoundState::Waiting
+        && !Controller->IsReadyRoomRequestPending();
     ReadyButton->SetIsEnabled(bEditable);
+    if (Controller && SpawnChoice)
+    {
+        // Replication/programmatic selection must never submit a new request.
+        bSynchronizingSpawnChoice = true;
+        if (DisplayedSpawnGroups != Controller->AvailableSpawnGroups)
+        {
+            DisplayedSpawnGroups = Controller->AvailableSpawnGroups;
+            SpawnChoice->ClearOptions();
+            for (FName Group : DisplayedSpawnGroups) SpawnChoice->AddOption(Group.ToString());
+        }
+        const FString Selected = Player ? Player->SelectedSpawnGroup.ToString() : FString();
+        if (SpawnChoice->GetSelectedOption() != Selected)
+        {
+            if (Player && DisplayedSpawnGroups.Contains(Player->SelectedSpawnGroup)) SpawnChoice->SetSelectedOption(Selected);
+            else SpawnChoice->ClearSelection();
+        }
+        SpawnChoice->SetIsEnabled(bEditable && DisplayedSpawnGroups.Num() > 0);
+        bSynchronizingSpawnChoice = false;
+        if (FeedbackText)
+        {
+            FString Feedback = Controller->GetReadyRoomFeedback();
+            if (DisplayedSpawnGroups.IsEmpty()) Feedback += TEXT("\nNo selectable spawn groups are available. The server controls deployment.");
+            const FText NewFeedback = FText::FromString(Feedback);
+            if (!FeedbackText->GetText().EqualTo(NewFeedback)) FeedbackText->SetText(NewFeedback);
+        }
+    }
     ButtonText->SetText(FText::FromString(Player && Player->bReady ? TEXT("Cancel ready") : TEXT("Ready")));
     FString Status = TEXT("Connecting securely...\nYour Ready button unlocks after server admission.");
     if (bAdmitted && GS)
@@ -135,4 +172,15 @@ FReply USPReadyRoomWidget::NativeOnPreviewKeyDown(const FGeometry& Geometry, con
         return FReply::Handled();
     }
     return Super::NativeOnPreviewKeyDown(Geometry, Event);
+}
+
+void USPReadyRoomWidget::SelectSpawn(FString Selection, ESelectInfo::Type SelectionType)
+{
+    if (bSynchronizingSpawnChoice || SelectionType == ESelectInfo::Direct || !SpawnChoice || !SpawnChoice->GetIsEnabled()) return;
+    if (auto* PC = GetOwningPlayer<ASPObserverPlayerController>())
+    {
+        const auto* Player = PC->GetPlayerState<ASPPlayerState>();
+        const FName Group(*Selection);
+        if (Player && Group != Player->SelectedSpawnGroup && DisplayedSpawnGroups.Contains(Group)) PC->RequestSpawnGroup(Group);
+    }
 }
