@@ -269,8 +269,10 @@ test('spawn selector is owner-scoped, server filtered and request correlated', a
   assert.doesNotMatch(widget, /Player->SelectedSpawnGroup\s*=/);
 });
 
-test('action rebinding validates the entire candidate before changing live mappings', async () => {
+test('action rebinding validates candidates and confirms atomic swaps before changing live mappings', async () => {
+  const settingsHeader = await source('../../Source/ShadowProtocol/Public/SPControlSettings.h');
   const settings = await source('../../Source/ShadowProtocol/Private/SPControlSettings.cpp');
+  const widgetHeader = await source('../../Source/ShadowProtocol/Public/SPControlsWidget.h');
   const widget = await source('../../Source/ShadowProtocol/Private/SPControlsWidget.cpp');
   const apply = settings.split('bool USPControlSettings::ApplyActionOverrides')[1].split('bool USPControlSettings::RebindAction')[0];
   for (const guard of ['CanRebindAction', 'Seen.Contains', 'EKeys::Escape', 'EKeys::Tab', 'ConsoleKeys', 'GetAxisMappings', 'Existing.Key == Override.Key']) assert.ok(apply.includes(guard));
@@ -278,6 +280,22 @@ test('action rebinding validates the entire candidate before changing live mappi
   assert.ok(apply.lastIndexOf('return false') < apply.indexOf('Install(Candidate)'));
   assert.doesNotMatch(settings, /SaveKeyMappings|Input->SaveConfig/);
   assert.match(settings, /ActionOverrides = Previous; return false/);
+
+  assert.match(settingsHeader, /FindActionUsingKey/);
+  assert.match(settingsHeader, /SwapActionBinding/);
+  const swap = settings.split('bool USPControlSettings::SwapActionBinding')[1].split('void USPControlSettings::ResetActionBindings')[0];
+  assert.match(swap, /FindActionUsingKey\(NewKey, Action, CurrentOwner\)/);
+  assert.match(swap, /ActionOverrides = PreviousOverrides/);
+  assert.ok(swap.indexOf('ActionOverrides.Add(FInputActionKeyMapping(Action, NewKey))') < swap.indexOf('ApplyActionOverrides(Error)'));
+  assert.ok(swap.indexOf('ActionOverrides.Add(FInputActionKeyMapping(ConflictingAction, PreviousActionKey))') < swap.indexOf('ApplyActionOverrides(Error)'));
+
+  assert.match(widgetHeader, /ConfirmSwapButton/);
+  assert.match(widgetHeader, /PendingConflictAction/);
+  assert.match(widget, /FindActionUsingKey\(Chord.Key, \*Action, ConflictAction\)/);
+  assert.match(widget, /ConfirmSwapButton->SetIsEnabled\(true\)/);
+  assert.match(widget, /ConfirmPendingSwap/);
+  assert.match(widget, /SwapActionBinding\(/);
+  assert.match(widget, /ClearPendingSwap\(\)/);
   assert.match(widget, /GetIsSelectingKey/);
   assert.match(widget, /if \(bSynchronizingBinding\) return/);
 });
