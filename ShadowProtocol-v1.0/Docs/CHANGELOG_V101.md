@@ -255,3 +255,9 @@ See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flo
 - Add correlated server confirmation/rejection and bounded pending UI for ready/spawn requests.
 - Keep authoritative validation and clear readiness when spawn selection changes.
 - Document unconfigured-map and network-delay behavior in UI_CONTROLS_V101.md.
+
+## Action rebinding
+
+- Add action/key picker, saved overrides, conflict feedback and restore-original bindings.
+- Validate changes atomically and preserve movement/menu bindings and project config.
+- Add Unreal automation coverage (engine execution pending) and a CI source contract.

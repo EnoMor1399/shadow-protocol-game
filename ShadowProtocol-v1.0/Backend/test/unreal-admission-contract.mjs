@@ -268,3 +268,16 @@ test('spawn selector is owner-scoped, server filtered and request correlated', a
   assert.match(widget, /PC->RequestSpawnGroup\(Group\)/);
   assert.doesNotMatch(widget, /Player->SelectedSpawnGroup\s*=/);
 });
+
+test('action rebinding validates the entire candidate before changing live mappings', async () => {
+  const settings = await source('../../Source/ShadowProtocol/Private/SPControlSettings.cpp');
+  const widget = await source('../../Source/ShadowProtocol/Private/SPControlsWidget.cpp');
+  const apply = settings.split('bool USPControlSettings::ApplyActionOverrides')[1].split('bool USPControlSettings::RebindAction')[0];
+  for (const guard of ['CanRebindAction', 'Seen.Contains', 'EKeys::Escape', 'EKeys::Tab', 'ConsoleKeys', 'GetAxisMappings', 'Existing.Key == Override.Key']) assert.ok(apply.includes(guard));
+  assert.ok(apply.indexOf('Candidate.RemoveAll') < apply.indexOf('Candidate.Add(Override)'));
+  assert.ok(apply.lastIndexOf('return false') < apply.indexOf('Install(Candidate)'));
+  assert.doesNotMatch(settings, /SaveKeyMappings|Input->SaveConfig/);
+  assert.match(settings, /ActionOverrides = Previous; return false/);
+  assert.match(widget, /GetIsSelectingKey/);
+  assert.match(widget, /if \(bSynchronizingBinding\) return/);
+});

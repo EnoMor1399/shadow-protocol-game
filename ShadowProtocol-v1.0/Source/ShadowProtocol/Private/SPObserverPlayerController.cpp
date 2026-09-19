@@ -47,7 +47,12 @@ void ASPObserverPlayerController::GetLifetimeReplicatedProps(TArray<FLifetimePro
 void ASPObserverPlayerController::BeginPlay()
 {
     Super::BeginPlay();
-    const auto* Settings = GetDefault<USPControlSettings>();
+    auto* Settings = GetMutableDefault<USPControlSettings>();
+    if (IsLocalController())
+    {
+        FString BindingError;
+        Settings->ApplyActionOverrides(BindingError);
+    }
     SetMouseSensitivity(Settings->MouseSensitivity);
     bInvertMouseY = Settings->bInvertMouseY;
     if (IsLocalController() && GetNetMode() != NM_DedicatedServer && bShowNativeReadyRoom)

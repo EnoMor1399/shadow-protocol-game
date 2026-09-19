@@ -1,3 +1,6 @@
+#include "SPControlSettings.h"
+#include "SPCharacter.h"
+#include "Components/InputKeySelector.h"
 #include "SPControlsWidget.h"
 #include "SPObserverPlayerController.h"
 #include "Blueprint/WidgetTree.h"
@@ -82,6 +85,19 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
             Label(FString::Printf(TEXT("%s   %s"), Hint.Label, *Keys), 16, FLinearColor::White);
         }
         Label(TEXT("COMBAT & TACTICS"), 20, FLinearColor(0.35f, 0.85f, 0.8f));
+        Label(TEXT("Choose an action, then click its key to rebind. Esc cancels key capture. Movement and menu shortcuts stay fixed."), 16, FLinearColor::White);
+        BindingAction = WidgetTree->ConstructWidget<UComboBoxString>();
+        BindingAction->OnSelectionChanged.AddUniqueDynamic(this, &USPControlsWidget::ChooseBindingAction);
+        Column->AddChildToVerticalBox(BindingAction)->SetPadding(FMargin(0, 8));
+        BindingKey = WidgetTree->ConstructWidget<UInputKeySelector>();
+        BindingKey->SetAllowGamepadKeys(false);
+        BindingKey->SetAllowModifierKeys(false);
+        BindingKey->SetEscapeKeys(TArray<FKey>{EKeys::Escape});
+        BindingKey->OnKeySelected.AddUniqueDynamic(this, &USPControlsWidget::CaptureBinding);
+        Column->AddChildToVerticalBox(BindingKey)->SetPadding(FMargin(0, 8));
+        BindingFeedback = Label(TEXT("Single keys only. Conflicting bindings are kept unchanged."), 16, FLinearColor::White);
+        auto* Restore = Button(TEXT("Restore original action bindings"));
+        Restore->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ResetBindings);
         // Only list implemented pawn controls. Config-only actions are not advertised.
         for (const FControlHint& Hint : {
             FControlHint{TEXT("Fire"), TEXT("Fire (single press)")}, FControlHint{TEXT("Aim"), TEXT("Aim (hold)")},
@@ -103,9 +119,12 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
                     Key += Mapping.Key.GetDisplayName().ToString();
                     Keys += (Keys.IsEmpty() ? TEXT("") : TEXT(" / ")) + Key;
                 }
-            Label(FString::Printf(TEXT("%s   %s"), Hint.Label, Keys.IsEmpty() ? TEXT("Unbound") : *Keys), 16, FLinearColor::White);
+            ActionNames.Add(Hint.Label, FName(Hint.Mapping));
+            BindingAction->AddOption(Hint.Label);
+            BindingLabels.Add(FName(Hint.Mapping), Label(FString::Printf(TEXT("%s   %s"), Hint.Label, Keys.IsEmpty() ? TEXT("Unbound") : *Keys), 16, FLinearColor::White));
         }
         Label(TEXT("Aim, crouch, sprint and lean are hold controls. Release and press again after closing a menu."), 16, FLinearColor::White);
+        BindingAction->SetSelectedIndex(0);
         WidgetTree->RootWidget = Backdrop;
     }
     return Super::RebuildWidget();
@@ -119,6 +138,10 @@ void USPControlsWidget::NativeConstruct()
         SensitivitySlider->SetValue(PC->GetMouseSensitivity());
         InvertCheck->SetIsChecked(PC->IsMouseYInverted());
         SetSensitivity(PC->GetMouseSensitivity());
+        FString BindingError;
+        if (!GetMutableDefault<USPControlSettings>()->ApplyActionOverrides(BindingError))
+            BindingFeedback->SetText(FText::FromString(TEXT("Saved bindings could not be applied. Restore original bindings to recover. ") + BindingError));
+        RefreshBindings();
     }
 }
 
@@ -144,8 +167,69 @@ FReply USPControlsWidget::NativeOnPreviewKeyDown(const FGeometry& Geometry, cons
 {
     if (Event.GetKey() == EKeys::Escape && !Event.IsRepeat())
     {
+        if (BindingKey && BindingKey->GetIsSelectingKey())
+            return Super::NativeOnPreviewKeyDown(Geometry, Event); // let the selector cancel capture
         CloseControls();
         return FReply::Handled();
     }
     return Super::NativeOnPreviewKeyDown(Geometry, Event);
+}
+
+void USPControlsWidget::ChooseBindingAction(FString Selection, ESelectInfo::Type SelectionType)
+{
+    RefreshBindings();
+}
+
+void USPControlsWidget::RefreshBindings()
+{
+    if (!BindingAction || !BindingKey) return;
+    bSynchronizingBinding = true;
+    const auto* Input = GetDefault<UInputSettings>();
+    const FName* Selected = ActionNames.Find(BindingAction->GetSelectedOption());
+    FInputChord Current;
+    for (const auto& Pair : ActionNames)
+    {
+        FString Keys;
+        for (const auto& Mapping : Input->GetActionMappings())
+            if (Mapping.ActionName == Pair.Value)
+            {
+                FString Key = Mapping.bCtrl ? TEXT("Ctrl+") : TEXT("");
+                if (Mapping.bAlt) Key += TEXT("Alt+");
+                if (Mapping.bShift) Key += TEXT("Shift+");
+                if (Mapping.bCmd) Key += TEXT("Cmd+");
+                Key += Mapping.Key.GetDisplayName().ToString();
+                Keys += (Keys.IsEmpty() ? TEXT("") : TEXT(" / ")) + Key;
+                if (Selected && Mapping.ActionName == *Selected && !Mapping.Key.IsGamepadKey())
+                    Current = FInputChord(Mapping.Key, Mapping.bShift, Mapping.bCtrl, Mapping.bAlt, Mapping.bCmd);
+            }
+        if (auto* Label = BindingLabels.Find(Pair.Value))
+            (*Label)->SetText(FText::FromString(Pair.Key + TEXT("   ") + (Keys.IsEmpty() ? TEXT("Unbound") : Keys)));
+    }
+    BindingKey->SetIsEnabled(Selected != nullptr);
+    BindingKey->SetSelectedKey(Current);
+    bSynchronizingBinding = false;
+}
+
+void USPControlsWidget::CaptureBinding(FInputChord Chord)
+{
+    if (bSynchronizingBinding) return;
+    const FName* Action = ActionNames.Find(BindingAction->GetSelectedOption());
+    FString Error;
+    if (!Action || Chord.bShift || Chord.bCtrl || Chord.bAlt || Chord.bCmd)
+        Error = TEXT("Choose a single key without a modifier combination.");
+    else
+    {
+        if (auto* PC = GetOwningPlayer<ASPObserverPlayerController>())
+            if (auto* Character = Cast<ASPCharacter>(PC->GetPawn())) Character->ReleaseHeldControls();
+        GetMutableDefault<USPControlSettings>()->RebindAction(*Action, Chord.Key, Error);
+    }
+    BindingFeedback->SetText(FText::FromString(Error.IsEmpty() ? TEXT("Binding applied and saved.") : Error));
+    RefreshBindings();
+}
+
+void USPControlsWidget::ResetBindings()
+{
+    GetMutableDefault<USPControlSettings>()->ResetActionBindings();
+    BindingFeedback->SetText(FText::FromString(TEXT("Original action bindings restored. Mouse settings unchanged.")));
+    RefreshBindings();
 }

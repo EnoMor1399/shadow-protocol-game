@@ -18,8 +18,7 @@ slider/checkbox controls. Settings apply immediately and save to local
 GameUserSettings config on closing or controller teardown. The settings currently
 apply to the machine profile, not separate split-screen player profiles. Sensitivity
 is clamped to 0.25–3.0, including validation of invalid/non-finite config values.
-Reset restores only mouse preferences. Key rebinding and gamepad navigation are
-not implemented in this pass. The control reference reads current input mappings,
+Reset restores only mouse preferences. Action rebinding is described below; gamepad navigation remains pending. The control reference reads current input mappings,
 and excludes config-only actions without native implementation.
 
 Opening/closing UI releases aim, sprint, crouch and both lean directions, then
@@ -80,3 +79,36 @@ selecting a different spawn clears readiness; rejected/stale choices do not muta
 state; keyboard dropdown navigation does not trigger requests during replication;
 delayed, dropped and reordered acknowledgements leave controls recoverable. Source
 checks cover the wiring; engine/UHT and packaged UI verification remain pending.
+
+## Action key rebinding
+
+The combat/tactics section now includes an action picker, native key-capture
+control and Restore original action bindings button. Select an action, click its
+key and press a keyboard key or mouse button. Escape cancels capture before it
+closes the panel. Successful changes immediately refresh the displayed bindings.
+
+Rebinding supports one keyboard/mouse binding per supported action. It replaces
+that action's existing keyboard/mouse alternatives; gamepad mappings are retained.
+Movement axes, menu controls, modifier combinations and gamepad remapping remain
+outside this pass. Conflicts with other actions (including config-only actions),
+movement/look axes, console and reserved navigation keys are rejected without
+changing the current mapping. To swap two keys interactively, first move one action
+to an unused key. Saved swaps are loaded and validated as an atomic candidate.
+
+Only our action overrides are saved to GameUserSettings; project Input defaults
+are not rewritten. RebuildKeymaps applies the runtime change. Restore resets action
+bindings to the process's original project mappings and preserves mouse settings.
+Settings remain machine-wide, including all PIE/local-player instances in that
+process. Invalid saved overrides are ignored with feedback in the controls panel;
+Restore recovers the baseline. Reopening PIE after editing project defaults may
+require restarting the editor to recapture the baseline.
+
+Run UE automation `ShadowProtocol.Controls.AtomicRebinding` on the stock project
+input configuration to verify conflict rejection, unchanged state on failure,
+valid replacement and saved swaps. The test restores runtime mappings and does not
+save config. This test has been added but cannot run here without UE. Also test
+capture cancellation, keyboard focus, mouse-button capture, restart persistence,
+reset, and held-action release in packaged clients before runtime sign-off.
+
+API references: [key selector](https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Runtime/UMG/UInputKeySelector)
+and [input settings](https://dev.epicgames.com/documentation/unreal-engine/API/Runtime/Engine/UInputSettings).

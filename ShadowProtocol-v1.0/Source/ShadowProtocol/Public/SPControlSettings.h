@@ -1,6 +1,7 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
+#include "GameFramework/PlayerInput.h"
 #include "SPControlSettings.generated.h"
 
 /** Machine-local preferences; no session credentials or gameplay authority. */
@@ -11,4 +12,9 @@ class SHADOWPROTOCOL_API USPControlSettings : public UObject
 public:
     UPROPERTY(Config) float MouseSensitivity = 1.f;
     UPROPERTY(Config) bool bInvertMouseY = false;
+    UPROPERTY(Config) TArray<FInputActionKeyMapping> ActionOverrides;
+    bool ApplyActionOverrides(FString& Error);
+    bool RebindAction(FName Action, FKey Key, FString& Error);
+    void ResetActionBindings();
+    static bool CanRebindAction(FName Action);
 };
