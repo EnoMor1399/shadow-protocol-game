@@ -22,7 +22,7 @@ ASPCharacter::ASPCharacter()
     bUseControllerRotationYaw = true;
     FirstPersonCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FirstPersonCamera"));
     FirstPersonCamera->SetupAttachment(GetRootComponent());
-    FirstPersonCamera->SetRelativeLocation(FVector(0.f, 0.f, 64.f));
+    FirstPersonCamera->SetRelativeLocation(FVector(0.f, 0.f, BaseEyeHeight));
     FirstPersonCamera->bUsePawnControlRotation = true;
     GetCharacterMovement()->GetNavAgentPropertiesRef().bCanCrouch = true;
     Health = CreateDefaultSubobject<USPHealthComponent>(TEXT("Health"));
@@ -132,7 +132,7 @@ void ASPCharacter::ServerFortify_Implementation()
         Barricade->ServerDeploy(Team); --BarricadesRemaining;
     }
 }
-void ASPCharacter::Tick(float DT){ Super::Tick(DT); if(IsLocallyControlled()) GetCharacterMovement()->MaxWalkSpeed=bSprinting?620.f:420.f; if(!HasAuthority()) return; if(bSprinting){Stamina=FMath::Max(0.f,Stamina-DT*22.f);if(Stamina<=0.f){bSprinting=false;GetCharacterMovement()->MaxWalkSpeed=420.f;}}else Stamina=FMath::Min(100.f,Stamina+DT*10.f); }
+void ASPCharacter::Tick(float DT){ Super::Tick(DT); if(FirstPersonCamera) FirstPersonCamera->SetRelativeLocation(FVector(0.f,0.f,BaseEyeHeight)); if(IsLocallyControlled()) GetCharacterMovement()->MaxWalkSpeed=bSprinting?620.f:420.f; if(!HasAuthority()) return; if(bSprinting){Stamina=FMath::Max(0.f,Stamina-DT*22.f);if(Stamina<=0.f){bSprinting=false;GetCharacterMovement()->MaxWalkSpeed=420.f;}}else Stamina=FMath::Min(100.f,Stamina+DT*10.f); }
 
 void ASPCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
