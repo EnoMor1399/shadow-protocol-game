@@ -271,3 +271,9 @@ See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flo
 - Pending swap state is cleared when the player changes action, closes controls or restores original bindings.
 - Unreal automation coverage now exercises conflict lookup, successful two-action swap and stale-confirmation rollback.
 - The Node source contract now requires conflict detection, confirmation UI and atomic swap rollback wiring in CI.
+
+## HUD readability
+
+- Add persisted combat-HUD contrast, crosshair size/visibility and help-text options with a separate reset.
+- Add outlined reticle and replicated objective-status strip.
+- Engine build and rendered/readability verification remain pending.

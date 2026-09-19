@@ -12,6 +12,11 @@ class SHADOWPROTOCOL_API USPControlSettings : public UObject
 public:
     UPROPERTY(Config) float MouseSensitivity = 1.f;
     UPROPERTY(Config) bool bInvertMouseY = false;
+    UPROPERTY(Config) bool bHighContrastHUD = false;
+    UPROPERTY(Config) bool bShowCrosshair = true;
+    UPROPERTY(Config) bool bShowHUDHints = true;
+    UPROPERTY(Config) float CrosshairScale = 1.f;
+    float GetSafeCrosshairScale() const;
     UPROPERTY(Config) TArray<FInputActionKeyMapping> ActionOverrides;
     bool ApplyActionOverrides(FString& Error);
     bool RebindAction(FName Action, FKey Key, FString& Error);

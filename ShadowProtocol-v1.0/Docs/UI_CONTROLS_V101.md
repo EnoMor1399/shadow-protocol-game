@@ -119,3 +119,22 @@ reset, and held-action release in packaged clients before runtime sign-off.
 
 API references: [key selector](https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Runtime/UMG/UInputKeySelector)
 and [input settings](https://dev.epicgames.com/documentation/unreal-engine/API/Runtime/Engine/UInputSettings).
+
+## HUD readability preferences
+
+Controls now contains combat-HUD high contrast, crosshair visibility/size and help
+text toggles. The high-contrast HUD uses opaque black panels and a yellow accent;
+the crosshair has a black outline for visibility against bright backgrounds. Size
+is clamped to 0.75–2.5x, with non-finite config values falling back to 1x. Preferences
+apply when returning to gameplay and save with the other controls settings on menu
+close or controller teardown. Reset HUD preferences leaves mouse and key bindings
+unchanged. These settings affect the combat HUD, not a full menu/theme overhaul.
+
+Objective status uses existing replicated readiness, round and objective flags.
+It does not reveal hidden locations or introduce new client authority. Hiding help
+text does not hide health, ammunition, score or objective status. Existing rules
+still suppress the crosshair while downed, eliminated, sprinting or without a weapon.
+
+UE visual checks remain required: contrast on bright/dark maps, crosshair sizes and
+visibility, small/ultrawide viewports, menu close/reopen and restart persistence,
+separate resets, and objective text across waiting/preparation/action/post-round.

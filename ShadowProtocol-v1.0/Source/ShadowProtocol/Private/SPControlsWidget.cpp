@@ -71,6 +71,30 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
         Column->AddChildToVerticalBox(InvertCheck)->SetPadding(FMargin(0, 12));
         auto* Reset = Button(TEXT("Reset mouse settings"));
         Reset->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ResetDefaults);
+        Label(TEXT("HUD READABILITY"), 20, FLinearColor(0.35f, 0.85f, 0.8f));
+        const auto Check = [&](const TCHAR* Caption)
+        {
+            auto* Item = WidgetTree->ConstructWidget<UCheckBox>();
+            auto* Text = WidgetTree->ConstructWidget<UTextBlock>();
+            Text->SetText(FText::FromString(Caption)); Text->SetAutoWrapText(true);
+            Item->SetContent(Text);
+            Column->AddChildToVerticalBox(Item)->SetPadding(FMargin(0, 8));
+            return Item;
+        };
+        ContrastCheck = Check(TEXT("High-contrast combat HUD"));
+        ContrastCheck->OnCheckStateChanged.AddUniqueDynamic(this, &USPControlsWidget::SetHUDContrast);
+        CrosshairCheck = Check(TEXT("Show crosshair"));
+        CrosshairCheck->OnCheckStateChanged.AddUniqueDynamic(this, &USPControlsWidget::SetCrosshairVisible);
+        HintsCheck = Check(TEXT("Show HUD help text"));
+        HintsCheck->OnCheckStateChanged.AddUniqueDynamic(this, &USPControlsWidget::SetHUDHints);
+        CrosshairLabel = Label(TEXT("Crosshair size"), 18, FLinearColor::White);
+        CrosshairSlider = WidgetTree->ConstructWidget<USlider>();
+        CrosshairSlider->SetMinValue(0.75f); CrosshairSlider->SetMaxValue(2.5f); CrosshairSlider->SetStepSize(0.05f);
+        CrosshairSlider->OnValueChanged.AddUniqueDynamic(this, &USPControlsWidget::SetCrosshairScale);
+        Column->AddChildToVerticalBox(CrosshairSlider)->SetPadding(FMargin(0, 8));
+        auto* ResetHUD = Button(TEXT("Reset HUD preferences"));
+        ResetHUD->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ResetHUDPreferences);
+        Label(TEXT("HUD changes appear when you return to play. Objective and player status remain visible when help text is hidden."), 16, FLinearColor::White);
         Label(TEXT("MOVEMENT"), 20, FLinearColor(0.35f, 0.85f, 0.8f));
         const UInputSettings* Input = GetDefault<UInputSettings>();
         struct FControlHint { const TCHAR* Mapping; const TCHAR* Label; };
@@ -137,6 +161,13 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
 void USPControlsWidget::NativeConstruct()
 {
     Super::NativeConstruct();
+    const auto* HUDSettings = GetDefault<USPControlSettings>();
+    ContrastCheck->SetIsChecked(HUDSettings->bHighContrastHUD);
+    CrosshairCheck->SetIsChecked(HUDSettings->bShowCrosshair);
+    HintsCheck->SetIsChecked(HUDSettings->bShowHUDHints);
+    CrosshairSlider->SetValue(HUDSettings->GetSafeCrosshairScale());
+    SetCrosshairScale(HUDSettings->GetSafeCrosshairScale());
+    CrosshairSlider->SetIsEnabled(HUDSettings->bShowCrosshair);
     if (auto* PC = GetOwningPlayer<ASPObserverPlayerController>())
     {
         SensitivitySlider->SetValue(PC->GetMouseSensitivity());
@@ -305,4 +336,31 @@ void USPControlsWidget::ResetBindings()
     GetMutableDefault<USPControlSettings>()->ResetActionBindings();
     BindingFeedback->SetText(FText::FromString(TEXT("Original action bindings restored. Mouse settings unchanged.")));
     RefreshBindings();
+}
+
+void USPControlsWidget::SetHUDContrast(bool bEnabled)
+{
+    GetMutableDefault<USPControlSettings>()->bHighContrastHUD = bEnabled;
+}
+void USPControlsWidget::SetCrosshairVisible(bool bEnabled)
+{
+    GetMutableDefault<USPControlSettings>()->bShowCrosshair = bEnabled;
+    if (CrosshairSlider) CrosshairSlider->SetIsEnabled(bEnabled);
+}
+void USPControlsWidget::SetHUDHints(bool bEnabled)
+{
+    GetMutableDefault<USPControlSettings>()->bShowHUDHints = bEnabled;
+}
+void USPControlsWidget::SetCrosshairScale(float Value)
+{
+    auto* Settings = GetMutableDefault<USPControlSettings>();
+    Settings->CrosshairScale = Value;
+    Settings->CrosshairScale = Settings->GetSafeCrosshairScale();
+    if (CrosshairLabel) CrosshairLabel->SetText(FText::FromString(FString::Printf(TEXT("Crosshair size   %.2fx"), Settings->CrosshairScale)));
+}
+void USPControlsWidget::ResetHUDPreferences()
+{
+    ContrastCheck->SetIsChecked(false); CrosshairCheck->SetIsChecked(true); HintsCheck->SetIsChecked(true);
+    CrosshairSlider->SetValue(1.f);
+    SetHUDContrast(false); SetCrosshairVisible(true); SetHUDHints(true); SetCrosshairScale(1.f);
 }

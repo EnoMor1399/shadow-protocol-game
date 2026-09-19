@@ -153,3 +153,8 @@ void USPControlSettings::ResetActionBindings()
     Install(OriginalMappings());
     SaveConfig();
 }
+
+float USPControlSettings::GetSafeCrosshairScale() const
+{
+    return FMath::IsFinite(CrosshairScale) ? FMath::Clamp(CrosshairScale, 0.75f, 2.5f) : 1.f;
+}

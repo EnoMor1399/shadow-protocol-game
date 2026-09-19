@@ -24,6 +24,16 @@ private:
     UPROPERTY(Transient) TObjectPtr<USlider> SensitivitySlider;
     UPROPERTY(Transient) TObjectPtr<UCheckBox> InvertCheck;
     UPROPERTY(Transient) TObjectPtr<UButton> ResumeButton;
+    UPROPERTY(Transient) TObjectPtr<UCheckBox> ContrastCheck;
+    UPROPERTY(Transient) TObjectPtr<UCheckBox> CrosshairCheck;
+    UPROPERTY(Transient) TObjectPtr<UCheckBox> HintsCheck;
+    UPROPERTY(Transient) TObjectPtr<USlider> CrosshairSlider;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> CrosshairLabel;
+    UFUNCTION() void SetHUDContrast(bool bEnabled);
+    UFUNCTION() void SetCrosshairVisible(bool bEnabled);
+    UFUNCTION() void SetHUDHints(bool bEnabled);
+    UFUNCTION() void SetCrosshairScale(float Value);
+    UFUNCTION() void ResetHUDPreferences();
     UPROPERTY(Transient) TObjectPtr<UComboBoxString> BindingAction;
     UPROPERTY(Transient) TObjectPtr<UInputKeySelector> BindingKey;
     UPROPERTY(Transient) TObjectPtr<UTextBlock> BindingFeedback;
