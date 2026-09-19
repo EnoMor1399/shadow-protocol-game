@@ -7,7 +7,8 @@ public class ShadowProtocol : ModuleRules
         PublicDependencyModuleNames.AddRange(new[] {
             "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput",
             "UMG", "Slate", "SlateCore", "GameplayTags", "AIModule",
-            "NavigationSystem", "OnlineSubsystem", "OnlineSubsystemUtils", "NetCore"
+            "NavigationSystem", "OnlineSubsystem", "OnlineSubsystemUtils", "NetCore",
+            "HTTP", "Json", "JsonUtilities"
         });
     }
 }
