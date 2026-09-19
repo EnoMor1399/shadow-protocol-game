@@ -1,3 +1,7 @@
+#include "SPControlsWidget.h"
+#include "SPControlSettings.h"
+#include "SPCharacter.h"
+#include "GameFramework/PlayerInput.h"
 #include "SPObserverPlayerController.h"
 #include "Net/UnrealNetwork.h"
 #include "Components/InputComponent.h"
@@ -13,6 +17,7 @@ void ASPObserverPlayerController::SetupInputComponent()
     Super::SetupInputComponent();
     if(InputComponent)
     {
+        InputComponent->BindAction("Controls",IE_Pressed,this,&ASPObserverPlayerController::ToggleControls);
         InputComponent->BindAction("ObserverNext",IE_Pressed,this,&ASPObserverPlayerController::CycleObserverNext);
         InputComponent->BindAction("ObserverFree",IE_Pressed,this,&ASPObserverPlayerController::ToggleFreeObserver);
     }
@@ -41,6 +46,9 @@ void ASPObserverPlayerController::GetLifetimeReplicatedProps(TArray<FLifetimePro
 void ASPObserverPlayerController::BeginPlay()
 {
     Super::BeginPlay();
+    const auto* Settings = GetDefault<USPControlSettings>();
+    SetMouseSensitivity(Settings->MouseSensitivity);
+    bInvertMouseY = Settings->bInvertMouseY;
     if (IsLocalController() && GetNetMode() != NM_DedicatedServer && bShowNativeReadyRoom)
     {
         ReadyRoomWidget = CreateWidget<USPReadyRoomWidget>(this, USPReadyRoomWidget::StaticClass());
@@ -55,27 +63,31 @@ void ASPObserverPlayerController::BeginPlay()
 void ASPObserverPlayerController::PlayerTick(float DeltaTime)
 {
     Super::PlayerTick(DeltaTime);
-    if (!IsLocalController() || !ReadyRoomWidget) return;
+    if (!IsLocalController()) return;
     const auto* GS = GetWorld()->GetGameState<ASPProtocolGameState>();
-    const bool bShow = GS && !GS->bMatchComplete && GS->MatchPhase == ESPMatchPhase::Planning;
-    ReadyRoomWidget->SetVisibility(bShow ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-    if (bShow) ReadyRoomWidget->RefreshReadyRoom();
+    const bool bShow = ReadyRoomWidget && GS && !GS->bMatchComplete && GS->MatchPhase == ESPMatchPhase::Planning;
+    if (ReadyRoomWidget)
+    {
+        ReadyRoomWidget->SetVisibility(bShow && !bControlsOpen ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+        ReadyRoomRefreshRemaining -= DeltaTime;
+        if (bShow && ReadyRoomRefreshRemaining <= 0.f)
+        {
+            ReadyRoomWidget->RefreshReadyRoom();
+            ReadyRoomRefreshRemaining = 0.1f;
+        }
+    }
     if (bShow != bReadyRoomInputActive)
     {
         bReadyRoomInputActive = bShow;
-        bShowMouseCursor = bShow;
-        if (bShow)
-        {
-            FInputModeUIOnly Mode;
-            Mode.SetWidgetToFocus(ReadyRoomWidget->TakeWidget());
-            SetInputMode(Mode);
-        }
-        else SetInputMode(FInputModeGameOnly());
+        ApplyInterfaceInputMode();
     }
 }
 
 void ASPObserverPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+    if (IsLocalController()) SaveControlSettings();
+    if (ControlsWidget) ControlsWidget->RemoveFromParent();
+    ControlsWidget = nullptr;
     if (ReadyRoomWidget) ReadyRoomWidget->RemoveFromParent();
     ReadyRoomWidget = nullptr;
     Super::EndPlay(EndPlayReason);
@@ -117,4 +129,59 @@ void ASPObserverPlayerController::ServerSelectSpawnGroup_Implementation(FName Sp
     if (!ConsumeReadyRoomRequest()) return;
     if (auto* Mode = GetWorld()->GetAuthGameMode<ASPProtocolGameMode>())
         Mode->SelectSpawnGroup(GetPlayerState<ASPPlayerState>(), SpawnGroupId);
+}
+
+void ASPObserverPlayerController::SetMouseSensitivity(float Value)
+{
+    MouseSensitivity = FMath::IsFinite(Value) ? FMath::Clamp(Value, 0.25f, 3.f) : 1.f;
+}
+void ASPObserverPlayerController::SaveControlSettings()
+{
+    auto* Settings = GetMutableDefault<USPControlSettings>();
+    Settings->MouseSensitivity = MouseSensitivity;
+    Settings->bInvertMouseY = bInvertMouseY;
+    Settings->SaveConfig();
+}
+void ASPObserverPlayerController::ToggleControls()
+{
+    if (!IsLocalController()) return;
+    if (!bControlsOpen)
+    {
+        ControlsWidget = CreateWidget<USPControlsWidget>(this, USPControlsWidget::StaticClass());
+        if (!ControlsWidget) return;
+        ControlsWidget->AddToPlayerScreen(100);
+        bControlsOpen = true;
+    }
+    else
+    {
+        bControlsOpen = false;
+        if (ControlsWidget) ControlsWidget->RemoveFromParent();
+        ControlsWidget = nullptr;
+        SaveControlSettings();
+    }
+    if (ReadyRoomWidget) ReadyRoomWidget->SetVisibility(bReadyRoomInputActive && !bControlsOpen ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+    ApplyInterfaceInputMode();
+}
+void ASPObserverPlayerController::ApplyInterfaceInputMode()
+{
+    // Release hold actions before the UI starts consuming key-up events.
+    if (auto* Character = Cast<ASPCharacter>(GetPawn())) Character->ReleaseHeldControls();
+    if (PlayerInput) PlayerInput->FlushPressedKeys();
+    const bool bModal = IsGameplayInputBlocked();
+    // These are paired on every transition; do not accumulate the controller ignore counters.
+    if (bInterfaceInputIgnored != bModal)
+    {
+        SetIgnoreMoveInput(bModal); SetIgnoreLookInput(bModal);
+        bInterfaceInputIgnored = bModal;
+    }
+    bShowMouseCursor = bModal;
+    UUserWidget* Focus = bControlsOpen ? static_cast<UUserWidget*>(ControlsWidget.Get()) : static_cast<UUserWidget*>(ReadyRoomWidget.Get());
+    if (bModal && Focus)
+    {
+        FInputModeUIOnly Mode;
+        Mode.SetWidgetToFocus(Focus->TakeWidget());
+        SetInputMode(Mode);
+        Focus->SetKeyboardFocus();
+    }
+    else SetInputMode(FInputModeGameOnly());
 }

@@ -48,6 +48,8 @@ jobs:
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror -I ../Source/ShadowProtocol/Public ../Tests/travel-validation.cpp -o /tmp/sp-travel-validation
           /tmp/sp-travel-validation
+          g++ -std=c++17 -Wall -Wextra -Werror -I ../Source/ShadowProtocol/Public ../Tests/held-controls.cpp -o /tmp/sp-held-controls
+          /tmp/sp-held-controls
 
   backend-postgres-integration:
     name: Backend PostgreSQL allocation + reconnect

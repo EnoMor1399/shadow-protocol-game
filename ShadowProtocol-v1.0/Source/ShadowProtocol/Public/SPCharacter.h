@@ -2,9 +2,11 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "SPTypes.h"
+#include "SPHeldLeanState.h"
 #include "SPCharacter.generated.h"
 
 class USPHealthComponent;
+class UCameraComponent;
 class ASPWeaponBase;
 class USPTacticalEquipmentComponent;
 class ASPBarricade;
@@ -21,6 +23,8 @@ public:
     virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
     virtual void Tick(float DeltaSeconds) override;
 
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Camera") TObjectPtr<UCameraComponent> FirstPersonCamera;
+    void ReleaseHeldControls();
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly) TObjectPtr<USPHealthComponent> Health;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly) TObjectPtr<USPTacticalEquipmentComponent> TacticalEquipment;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly) TObjectPtr<USPLagCompensationComponent> LagCompensation;
@@ -58,5 +62,8 @@ protected:
     void CycleEquipment(); void ThrowEquipment(); void CycleSquadOrder(); void Fortify();
     void BeginLeanLeft(); void EndLeanLeft(); void BeginLeanRight(); void EndLeanRight(); void Vault(); void CycleOptic(); void InspectWeapon();
     void UpdateCoverStateAuthority();
+    bool CanUseLocalControls() const;
+    FSPHeldLeanState HeldLean;
+    void UpdateHeldLean();
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 };

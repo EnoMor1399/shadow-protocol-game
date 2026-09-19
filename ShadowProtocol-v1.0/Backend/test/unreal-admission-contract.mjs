@@ -221,3 +221,32 @@ test('reconnect travel and promotion require a fresh grant and matching local re
   assert.match(promote, /PS->SelectedSpawnGroup = Reserved->SpawnGroup/);
   assert.match(promote, /PS->bReady = false/);
 });
+
+test('controls modal releases held input and preserves paired controller ignore state', async () => {
+  const controller = await source('../../Source/ShadowProtocol/Private/SPObserverPlayerController.cpp');
+  const pawn = await source('../../Source/ShadowProtocol/Private/SPCharacter.cpp');
+  const widget = await source('../../Source/ShadowProtocol/Private/SPControlsWidget.cpp');
+  const mode = controller.split('void ASPObserverPlayerController::ApplyInterfaceInputMode()')[1];
+  assert.ok(mode.indexOf('ReleaseHeldControls()') < mode.indexOf('SetInputMode(Mode)'));
+  assert.match(mode, /FlushPressedKeys/);
+  assert.match(mode, /bInterfaceInputIgnored != bModal/);
+  assert.doesNotMatch(mode, /ResetIgnore/);
+  assert.match(mode, /FInputModeGameOnly/);
+  assert.match(controller, /SaveControlSettings/);
+  assert.match(controller, /FMath::IsFinite\(Value\)/);
+  assert.match(pawn, /HeldLean.Reset\(\)/);
+  assert.match(pawn, /PC->IsGameplayInputBlocked\(\)/);
+  assert.match(widget, /NativeOnPreviewKeyDown/);
+  assert.match(widget, /EKeys::Escape && !Event.IsRepeat/);
+  assert.match(widget, /GetActionMappings/);
+});
+
+test('combat HUD reads live replicated state and hides behind modal UI', async () => {
+  const hud = await source('../../Source/ShadowProtocol/Private/SPCombatHUD.cpp');
+  const mode = await source('../../Source/ShadowProtocol/Private/SPProtocolGameMode.cpp');
+  assert.match(mode, /HUDClass=ASPCombatHUD::StaticClass/);
+  assert.match(hud, /PC->IsGameplayInputBlocked\(\)/);
+  for (const state of ['RoundTimeRemaining', 'AmmoInMagazine', 'Health', 'Stamina', 'SelectedEquipment']) assert.ok(hud.includes(state));
+  assert.doesNotMatch(hud, /Server[A-Za-z]+\(/);
+  assert.match(hud, /NO WEAPON EQUIPPED/);
+});

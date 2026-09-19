@@ -15,8 +15,11 @@ public:
     void RefreshReadyRoom();
 protected:
     virtual TSharedRef<SWidget> RebuildWidget() override;
+    virtual FReply NativeOnPreviewKeyDown(const FGeometry& Geometry, const FKeyEvent& Event) override;
 private:
     UPROPERTY(Transient) TObjectPtr<UTextBlock> StatusText;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> RosterText;
+    UFUNCTION() void OpenControls();
     UPROPERTY(Transient) TObjectPtr<UTextBlock> ButtonText;
     UPROPERTY(Transient) TObjectPtr<UButton> ReadyButton;
     UFUNCTION() void ToggleReady();

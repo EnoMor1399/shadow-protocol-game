@@ -1,4 +1,5 @@
 #include "SPProtocolGameMode.h"
+#include "SPCombatHUD.h"
 #include "SPOnlineGameSession.h"
 #include "SPProtocolGameState.h"
 #include "SPPlayerState.h"
@@ -40,6 +41,7 @@ bool IsSafeAdmissionOption(const FString& Value)
 
 ASPProtocolGameMode::ASPProtocolGameMode()
 {
+    HUDClass=ASPCombatHUD::StaticClass();
     GameSessionClass=ASPOnlineGameSession::StaticClass();
     DefaultPawnClass=ASPCharacter::StaticClass();
     GameStateClass=ASPProtocolGameState::StaticClass();

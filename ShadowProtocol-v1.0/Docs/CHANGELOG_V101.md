@@ -240,3 +240,11 @@ See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flo
 - Route Unreal ClientTravel through node-bound admission; correlate asynchronous attempts, restore local reserved team/spawn and preserve roster indices.
 - Add migration and PostgreSQL race/replay/expiry/capacity checks.
 - Mid-round life-state recovery, automatic backend slot publication and UE runtime verification remain pending; see RECONNECT_RESERVATIONS_V101.md.
+
+## Native UI and control-system pass
+
+- Add match/combat HUD and a scrollable ready-room roster.
+- Add Escape controls panel with saved sensitivity/invert-Y and current binding reference.
+- Release held actions across menu transitions, preserve input-ignore pairing, fix overlapping lean keys and crouch/sprint state.
+- Add a native first-person camera and enable crouch movement.
+- Add compiled lean-state regression checks; UE rendering/build verification remains pending (UI_CONTROLS_V101.md).
