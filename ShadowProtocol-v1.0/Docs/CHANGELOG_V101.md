@@ -261,3 +261,13 @@ See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flo
 - Add action/key picker, saved overrides, conflict feedback and restore-original bindings.
 - Validate changes atomically and preserve movement/menu bindings and project config.
 - Add Unreal automation coverage (engine execution pending) and a CI source contract.
+
+
+## Confirmed atomic key-binding swaps
+
+- The native controls panel now distinguishes supported-action conflicts from reserved/invalid-key failures.
+- Conflicting supported actions present an explicit **Confirm key swap** step instead of forcing the player through a temporary unused key.
+- Confirmed swaps exchange both actions in one candidate and preserve the previous live mapping if validation fails or the conflict changed.
+- Pending swap state is cleared when the player changes action, closes controls or restores original bindings.
+- Unreal automation coverage now exercises conflict lookup, successful two-action swap and stale-confirmation rollback.
+- The Node source contract now requires conflict detection, confirmation UI and atomic swap rollback wiring in CI.

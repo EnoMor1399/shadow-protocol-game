@@ -90,10 +90,17 @@ closes the panel. Successful changes immediately refresh the displayed bindings.
 Rebinding supports one keyboard/mouse binding per supported action. It replaces
 that action's existing keyboard/mouse alternatives; gamepad mappings are retained.
 Movement axes, menu controls, modifier combinations and gamepad remapping remain
-outside this pass. Conflicts with other actions (including config-only actions),
-movement/look axes, console and reserved navigation keys are rejected without
-changing the current mapping. To swap two keys interactively, first move one action
-to an unused key. Saved swaps are loaded and validated as an atomic candidate.
+outside this pass. Movement/look axes, console keys, reserved navigation keys and
+unsupported/config-only actions still fail closed without changing live mappings.
+
+When the selected key is already owned by another supported combat/tactics action,
+the panel now identifies that action and exposes an explicit **Confirm key swap**
+step. Confirming exchanges the two actions' current keyboard/mouse keys in one
+atomic candidate; there is no temporary unbound action. If the conflict changes
+before confirmation, either action becomes invalid, or full-candidate validation
+fails, the previous live bindings remain intact. Changing the selected action,
+closing the panel or restoring defaults clears any pending swap confirmation.
+Saved swaps are loaded and validated as one atomic candidate.
 
 Only our action overrides are saved to GameUserSettings; project Input defaults
 are not rewritten. RebuildKeymaps applies the runtime change. Restore resets action
@@ -105,7 +112,7 @@ require restarting the editor to recapture the baseline.
 
 Run UE automation `ShadowProtocol.Controls.AtomicRebinding` on the stock project
 input configuration to verify conflict rejection, unchanged state on failure,
-valid replacement and saved swaps. The test restores runtime mappings and does not
+valid replacement, conflict lookup, confirmed two-action swaps and stale-confirmation rollback. The test restores runtime mappings and does not
 save config. This test has been added but cannot run here without UE. Also test
 capture cancellation, keyboard focus, mouse-button capture, restart persistence,
 reset, and held-action release in packaged clients before runtime sign-off.

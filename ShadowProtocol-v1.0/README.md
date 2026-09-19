@@ -254,3 +254,8 @@ The Unreal dedicated-server bridge schedules rotation at about 75% of the issued
 Production PostgreSQL node enrollment now requires a short-lived control-plane attestation in addition to the registration bootstrap secret. The signed assertion binds server id, region, build, host, port and capacity and has a single-use UUID persisted in `server_node_attestations`; replay returns `409 server-attestation-replayed`.
 
 The orchestration signing secret remains outside the dedicated-server process. The process receives only `SP_NODE_ATTESTATION`, which the Unreal server bridge sends once during registration and clears from its own memory after successful consumption. See `Docs/NODE_ATTESTATION_V101.md`.
+
+
+### Controls conflict-safe key swapping
+
+The native controls panel now supports confirmed atomic swaps for supported combat/tactics actions. Selecting a key already owned by another supported action shows the conflict and requires **Confirm key swap**. Confirmation exchanges both actions as one validated candidate; failure leaves the current bindings unchanged. Pending swap state is discarded on action changes, controls close and restore-default operations. Movement/look axes and reserved/menu/system keys remain protected.
