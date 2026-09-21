@@ -82,6 +82,12 @@ struct FSPDedicatedServerAdmission
     FString UserId;
 
     UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    FString Team;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
+    FString TacticalSide;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")
     FString NetworkBuild;
 
     UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Dedicated Server")

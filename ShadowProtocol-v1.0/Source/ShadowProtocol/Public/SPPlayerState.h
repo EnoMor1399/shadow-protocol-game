@@ -20,6 +20,7 @@ public:
     UPROPERTY(Replicated, BlueprintReadOnly) ESPConnectionState ConnectionState = ESPConnectionState::Connected;
     UPROPERTY(Replicated, BlueprintReadOnly) FString AuthenticatedSessionId;
     UPROPERTY(Replicated, BlueprintReadOnly) FString AuthenticatedUserId;
+    UPROPERTY(Replicated, BlueprintReadOnly) int32 CompetitiveSlotIndex = INDEX_NONE;
     UPROPERTY(Replicated, BlueprintReadOnly) bool bSessionAuthenticated = false;
     UPROPERTY(Replicated, BlueprintReadOnly) int32 Eliminations = 0;
     UPROPERTY(Replicated, BlueprintReadOnly) int32 Deaths = 0;

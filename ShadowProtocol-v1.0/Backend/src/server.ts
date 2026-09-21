@@ -203,6 +203,12 @@ async function cleanupExpiredServerReservations(client:any){
   set active_allocations=greatest(0,n.active_allocations-r.release_count),updated_at=now()
   from released r where n.id=r.node_id`);
 
+  await client.query(`delete from match_player_slots mps
+    using server_allocations sa
+    where sa.match_id=mps.match_id and sa.user_id=mps.user_id
+      and sa.status='failed' and sa.connect_token_consumed_at is null
+      and mps.round_number=1 and mps.connection_state='disconnected'`);
+
   await client.query(`update matches m
     set assembly_state='assembling',assembled_at=null
     where m.assembly_state='ready' and m.ended_at is null
@@ -479,9 +485,22 @@ app.post('/v1/matches/allocate',async(req,reply)=>{
 
       if(!connectTarget||!matchId)throw new Error('match assembly did not produce a connection target');
 
+      const slotResult=await client.query(`select candidate as slot_index
+        from generate_series(0,$2::int-1) candidate
+        where not exists(select 1 from match_player_slots s
+          where s.match_id=$1 and s.round_number=1 and s.slot_index=candidate)
+        order by candidate limit 1`,[matchId,PROTOCOL_TARGET_PLAYERS]);
+      if(!slotResult.rowCount)throw new Error('assembled match has no free roster slot');
+      const slotIndex=Number(slotResult.rows[0].slot_index);
+      const team=slotIndex<5?'DirectorateNine':'Helix';
+      const tacticalSide=slotIndex<5?'attack':'defense';
+
       await client.query(`insert into server_allocations(id,match_id,server_id,region,status,user_id,connect_token_hash,connect_host,connect_port,expires_at,node_id)
         values($1,$2,$3,$4,'reserved',$5,$6,$7,$8,to_timestamp($9/1000.0),$10)`,
         [allocationId,matchId,serverId,parsed.data.region,session.uid,connectHash,connectTarget.host,connectTarget.port,expiresAt,nodeId]);
+      await client.query(`insert into match_player_slots(match_id,round_number,slot_index,user_id,team,tactical_side,connection_state,ready)
+        values($1,1,$2,$3,$4,$5,'disconnected',false)`,
+        [matchId,slotIndex,session.uid,team,tacticalSide]);
 
       const assembly=await client.query(`select m.target_players,count(sa.id)::int as reserved_players
         from matches m
@@ -497,6 +516,7 @@ app.post('/v1/matches/allocate',async(req,reply)=>{
         allocationId,matchId,serverId,region:parsed.data.region,tickRate:60,connectToken,
         connectHost:connectTarget.host,connectPort:connectTarget.port,expiresAt:new Date(expiresAt).toISOString(),
         networkBuild:session.build,backendProtocol:BACKEND_PROTOCOL_VERSION,allocator,
+        slotIndex,team,tacticalSide,
         matchAssembly:{state:assemblyState,targetPlayers,reservedPlayers}
       });
     }catch(error){await client.query('rollback');throw error;}finally{client.release();}
@@ -525,15 +545,31 @@ app.post('/v1/matches/admit',async(req,reply)=>{
     return reply.send({...admitted,backendProtocol:BACKEND_PROTOCOL_VERSION});
   }
   const tokenHash=sha256(parsed.data.connectToken);
-  const r=await pool.query(`update server_allocations sa
-    set status='live',started_at=coalesce(sa.started_at,now()),connect_token_consumed_at=now()
-    from matches m
-    where sa.id=$1 and sa.match_id=$2 and m.id=sa.match_id and sa.connect_token_hash=$3
-      and sa.connect_token_consumed_at is null and sa.expires_at>now() and sa.status in ('reserved','starting','ready')
-    returning sa.id as allocation_id,sa.match_id,sa.server_id,sa.region,sa.user_id,m.server_build`,[parsed.data.allocationId,parsed.data.matchId,tokenHash]);
-  if(!r.rowCount)return reply.code(403).send({error:'admission-denied'});
-  const admitted=r.rows[0];
-  return reply.send({admitted:true,allocationId:admitted.allocation_id,matchId:admitted.match_id,serverId:admitted.server_id,region:admitted.region,userId:admitted.user_id,networkBuild:admitted.server_build,backendProtocol:BACKEND_PROTOCOL_VERSION,authority:'dedicated-server'});
+  const client=await pool.connect();
+  try{
+    await client.query('begin');
+    const r=await client.query(`update server_allocations sa
+      set status='live',started_at=coalesce(sa.started_at,now()),connect_token_consumed_at=now()
+      from matches m
+      where sa.id=$1 and sa.match_id=$2 and m.id=sa.match_id and sa.connect_token_hash=$3
+        and sa.connect_token_consumed_at is null and sa.expires_at>now() and sa.status in ('reserved','starting','ready')
+      returning sa.id as allocation_id,sa.match_id,sa.server_id,sa.region,sa.user_id,m.server_build`,
+      [parsed.data.allocationId,parsed.data.matchId,tokenHash]);
+    if(!r.rowCount){await client.query('rollback');return reply.code(403).send({error:'admission-denied'});}
+    const admitted=r.rows[0];
+    const slot=await client.query(`update match_player_slots
+      set connection_state='connected',ready=false
+      where match_id=$1 and round_number=1 and user_id=$2 and connection_state='disconnected'
+      returning slot_index,team,tactical_side`,[admitted.match_id,admitted.user_id]);
+    if(!slot.rowCount){await client.query('rollback');return reply.code(409).send({error:'admission-roster-missing'});}
+    await client.query('commit');
+    return reply.send({
+      admitted:true,allocationId:admitted.allocation_id,matchId:admitted.match_id,serverId:admitted.server_id,
+      region:admitted.region,userId:admitted.user_id,networkBuild:admitted.server_build,
+      roundNumber:1,slotIndex:Number(slot.rows[0].slot_index),team:slot.rows[0].team,tacticalSide:slot.rows[0].tactical_side,
+      backendProtocol:BACKEND_PROTOCOL_VERSION,authority:'dedicated-server'
+    });
+  }catch(error){await client.query('rollback');throw error;}finally{client.release();}
 });
 
 const queueSchema = z.object({

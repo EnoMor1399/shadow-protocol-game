@@ -299,3 +299,21 @@ test('action rebinding validates candidates and confirms atomic swaps before cha
   assert.match(widget, /GetIsSelectingKey/);
   assert.match(widget, /if \(bSynchronizingBinding\) return/);
 });
+
+
+test('shared 5v5 admission preserves backend roster slot and team authority', async () => {
+  const server = await source('../../Source/ShadowProtocol/Private/SPDedicatedServerBackendSubsystem.cpp');
+  const header = await source('../../Source/ShadowProtocol/Public/SPDedicatedServerBackendSubsystem.h');
+  const mode = await source('../../Source/ShadowProtocol/Private/SPProtocolGameMode.cpp');
+  const playerHeader = await source('../../Source/ShadowProtocol/Public/SPPlayerState.h');
+  assert.match(header, /FString Team;/);
+  assert.match(header, /FString TacticalSide;/);
+  assert.match(server, /TryGetStringField\(TEXT\("team"\), Admission.Team\)/);
+  assert.match(server, /TryGetStringField\(TEXT\("tacticalSide"\), Admission.TacticalSide\)/);
+  assert.match(playerHeader, /CompetitiveSlotIndex = INDEX_NONE/);
+  assert.match(mode, /PS->CompetitiveSlotIndex = Admission.SlotIndex/);
+  assert.match(mode, /Admission.Team.Equals\(TEXT\("DirectorateNine"\)/);
+  assert.match(mode, /Admission.Team.Equals\(TEXT\("Helix"\)/);
+  const promote = mode.split('void ASPProtocolGameMode::PromoteAdmittedPlayer')[1].split('void ASPProtocolGameMode::HandleBackendAdmissionFailed')[0];
+  assert.doesNotMatch(promote, /AssignCompetitiveTeam\(PS\)/);
+});

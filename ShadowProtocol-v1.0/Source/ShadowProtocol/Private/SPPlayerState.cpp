@@ -39,6 +39,7 @@ void ASPPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
     DOREPLIFETIME(ASPPlayerState, ConnectionState);
     DOREPLIFETIME(ASPPlayerState, AuthenticatedSessionId);
     DOREPLIFETIME(ASPPlayerState, AuthenticatedUserId);
+    DOREPLIFETIME(ASPPlayerState, CompetitiveSlotIndex);
     DOREPLIFETIME(ASPPlayerState, bSessionAuthenticated);
     DOREPLIFETIME(ASPPlayerState, Eliminations);
     DOREPLIFETIME(ASPPlayerState, Deaths);

@@ -598,6 +598,8 @@ void USPDedicatedServerBackendSubsystem::HandleAdmissionResponse(
     JsonObject->TryGetStringField(TEXT("serverId"), Admission.ServerId);
     JsonObject->TryGetStringField(TEXT("region"), Admission.Region);
     JsonObject->TryGetStringField(TEXT("userId"), Admission.UserId);
+    JsonObject->TryGetStringField(TEXT("team"), Admission.Team);
+    JsonObject->TryGetStringField(TEXT("tacticalSide"), Admission.TacticalSide);
     JsonObject->TryGetStringField(TEXT("networkBuild"), Admission.NetworkBuild);
     JsonObject->TryGetStringField(TEXT("backendProtocol"), Admission.BackendProtocol);
 

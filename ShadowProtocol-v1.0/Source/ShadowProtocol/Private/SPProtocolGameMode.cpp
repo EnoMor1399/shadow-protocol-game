@@ -513,15 +513,38 @@ void ASPProtocolGameMode::PromoteAdmittedPlayer(APlayerController* PlayerControl
         PS->SelectedSpawnGroup = Reserved->SpawnGroup;
         ReconnectDeadlines.Remove(Reserved->PlayerId);
     }
+    if (!Reserved)
+    {
+        if (Admission.SlotIndex < 0 || Admission.SlotIndex >= ExpectedCompetitivePlayers)
+        {
+            RejectPendingAdmission(Admission.AllocationId, TEXT("Backend admission returned an invalid competitive slot."));
+            return;
+        }
+
+        if (Admission.Team.Equals(TEXT("DirectorateNine"), ESearchCase::CaseSensitive))
+        {
+            PS->Team = ESPTeam::DirectorateNine;
+        }
+        else if (Admission.Team.Equals(TEXT("Helix"), ESearchCase::CaseSensitive))
+        {
+            PS->Team = ESPTeam::Helix;
+        }
+        else
+        {
+            RejectPendingAdmission(Admission.AllocationId, TEXT("Backend admission returned an invalid competitive team."));
+            return;
+        }
+    }
+
     PendingAdmissions.Remove(Admission.AllocationId);
 
     AdmittedPlayerMatches.Add(Admission.UserId, Admission.MatchId);
     PS->AuthenticatedUserId = Admission.UserId;
     PS->AuthenticatedSessionId = Admission.UserId;
+    PS->CompetitiveSlotIndex = Admission.SlotIndex;
     PS->bSessionAuthenticated = true;
     PS->ConnectionState = ESPConnectionState::Connected;
     PS->bReady = false;
-    if (!Reserved) AssignCompetitiveTeam(PS);
     RefreshCompetitiveSlots();
 
     Super::HandleStartingNewPlayer_Implementation(PlayerController);
@@ -732,6 +755,12 @@ void ASPProtocolGameMode::RefreshCompetitiveSlots()
         const auto* ExistingSlot = Previous.FindByPredicate([&](const FSPCompetitivePlayerSlot& Old)
             { return !Identity.IsEmpty() ? Old.SessionId == Identity : Old.PlayerId == PS->GetPlayerId(); });
         if (ExistingSlot) Slot.SlotIndex = ExistingSlot->SlotIndex;
+        else if (PS->CompetitiveSlotIndex >= 0 && PS->CompetitiveSlotIndex < ExpectedCompetitivePlayers
+            && !Occupied.Contains(PS->CompetitiveSlotIndex))
+        {
+            Slot.SlotIndex = PS->CompetitiveSlotIndex;
+            Occupied.Add(Slot.SlotIndex);
+        }
         else
         {
             int32 FreeIndex = 0;
@@ -740,6 +769,7 @@ void ASPProtocolGameMode::RefreshCompetitiveSlots()
             Slot.SlotIndex = FreeIndex;
             Occupied.Add(FreeIndex);
         }
+        PS->CompetitiveSlotIndex = Slot.SlotIndex;
         ++Index;
         Slot.PlayerId=PS->GetPlayerId();
         Slot.Team=PS->Team;

@@ -224,6 +224,9 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   assert.equal(allocation.connectHost, PRIMARY_SERVER_HOST);
   assert.equal(allocation.connectPort, PRIMARY_SERVER_PORT);
   assert.equal(allocation.allocator, 'registry');
+  assert.equal(allocation.slotIndex, 0);
+  assert.equal(allocation.team, 'DirectorateNine');
+  assert.equal(allocation.tacticalSide, 'attack');
 
   const persistedAllocation = await db.query(
     `select user_id,node_id,server_id,connect_host,connect_port,connect_token_hash,connect_token_consumed_at,status
@@ -321,6 +324,10 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   assert.equal(admissionResponse.status, 200);
   const admission = await admissionResponse.json();
   assert.equal(admission.admitted, true);
+  assert.equal(admission.slotIndex, 0);
+  assert.equal(admission.roundNumber, 1);
+  assert.equal(admission.team, 'DirectorateNine');
+  assert.equal(admission.tacticalSide, 'attack');
   assert.equal(admission.userId, TEST_USER_ID);
   assert.equal(admission.matchId, allocation.matchId);
   assert.equal(admission.serverId, PRIMARY_SERVER_ID);
@@ -541,6 +548,9 @@ test('assembles ten solo allocations into one shared 5v5 Protocol match', async 
     assert.equal(allocation.matchAssembly.targetPlayers,10);
     assert.equal(allocation.matchAssembly.reservedPlayers,index+1);
     assert.equal(allocation.matchAssembly.state,index===9?'ready':'assembling');
+    assert.equal(allocation.slotIndex,index);
+    assert.equal(allocation.team,index<5?'DirectorateNine':'Helix');
+    assert.equal(allocation.tacticalSide,index<5?'attack':'defense');
     allocations.push(allocation);
   }
 
@@ -562,6 +572,14 @@ test('assembles ten solo allocations into one shared 5v5 Protocol match', async 
   assert.equal(Number(persisted.rows[0].servers),1);
   assert.equal(Number(persisted.rows[0].nodes),1);
 
+  const roster=await db.query(`select slot_index,user_id,team,tactical_side,connection_state
+    from match_player_slots where match_id=$1 and round_number=1 order by slot_index`,[sharedMatchId]);
+  assert.equal(roster.rowCount,10);
+  assert.deepEqual(roster.rows.map(r=>Number(r.slot_index)),[0,1,2,3,4,5,6,7,8,9]);
+  assert.equal(roster.rows.filter(r=>r.team==='DirectorateNine').length,5);
+  assert.equal(roster.rows.filter(r=>r.team==='Helix').length,5);
+  assert.ok(roster.rows.every(r=>r.connection_state==='disconnected'));
+
   const load=await db.query('select active_allocations from game_server_nodes where server_id=$1',['LAB-TEN']);
   assert.equal(Number(load.rows[0].active_allocations),10);
 
@@ -580,6 +598,8 @@ test('assembles ten solo allocations into one shared 5v5 Protocol match', async 
   assert.equal(replacement.matchId,sharedMatchId);
   assert.equal(replacement.matchAssembly.reservedPlayers,10);
   assert.equal(replacement.matchAssembly.state,'ready');
+  assert.equal(replacement.slotIndex,3);
+  assert.equal(replacement.team,'DirectorateNine');
 
   const expired=await db.query('select status from server_allocations where id=$1',[allocations[3].allocationId]);
   assert.equal(expired.rows[0].status,'failed');
