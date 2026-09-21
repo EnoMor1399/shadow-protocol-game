@@ -565,7 +565,30 @@ test('assembles ten solo allocations into one shared 5v5 Protocol match', async 
   const load=await db.query('select active_allocations from game_server_nodes where server_id=$1',['LAB-TEN']);
   assert.equal(Number(load.rows[0].active_allocations),10);
 
-  const overflowUser='70000000-0000-4000-8000-000000000000';
+  // Expiring one unconsumed reservation reopens the ready lobby and returns node capacity.
+  await db.query("update server_allocations set expires_at=now()-interval '1 second' where id=$1",[allocations[3].allocationId]);
+
+  const replacementUser='70000000-0000-4000-8000-000000000000';
+  const replacementSession=await createPlayerSession(replacementUser,'assembly-replacement@shadow-protocol.test','lab','assembly-replacement-device-nonce');
+  const replacementResponse=await fetch(`${BASE_URL}/v1/matches/allocate`,{
+    method:'POST',
+    headers:{'content-type':'application/json',authorization:`Bearer ${replacementSession.sessionToken}`},
+    body:JSON.stringify({region:'lab',mode:'PROTOCOL',map:'EMBASSY',ranked:true})
+  });
+  assert.equal(replacementResponse.status,201);
+  const replacement=await replacementResponse.json();
+  assert.equal(replacement.matchId,sharedMatchId);
+  assert.equal(replacement.matchAssembly.reservedPlayers,10);
+  assert.equal(replacement.matchAssembly.state,'ready');
+
+  const expired=await db.query('select status from server_allocations where id=$1',[allocations[3].allocationId]);
+  assert.equal(expired.rows[0].status,'failed');
+
+  const refillState=await db.query('select assembly_state,assembled_at from matches where id=$1',[sharedMatchId]);
+  assert.equal(refillState.rows[0].assembly_state,'ready');
+  assert.ok(refillState.rows[0].assembled_at);
+
+  const overflowUser='71000000-0000-4000-8000-000000000000';
   const overflowSession=await createPlayerSession(overflowUser,'assembly-overflow@shadow-protocol.test','lab','assembly-overflow-device-nonce');
   const overflow=await fetch(`${BASE_URL}/v1/matches/allocate`,{
     method:'POST',
@@ -575,7 +598,7 @@ test('assembles ten solo allocations into one shared 5v5 Protocol match', async 
   assert.equal(overflow.status,503);
   assert.equal((await overflow.json()).error,'no-healthy-game-server');
 
-  // The server credential remains valid after ten atomic reservations.
+  // The server credential remains valid after ten atomic active reservations.
   const heartbeat=await nodePost('/v1/servers/heartbeat',{serverId:'LAB-TEN',status:'ready'},'LAB-TEN',node.nodeCredential);
   assert.equal(heartbeat.status,200);
 });

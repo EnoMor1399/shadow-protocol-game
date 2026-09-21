@@ -202,6 +202,13 @@ async function cleanupExpiredServerReservations(client:any){
   update game_server_nodes n
   set active_allocations=greatest(0,n.active_allocations-r.release_count),updated_at=now()
   from released r where n.id=r.node_id`);
+
+  await client.query(`update matches m
+    set assembly_state='assembling',assembled_at=null
+    where m.assembly_state='ready' and m.ended_at is null
+      and not exists(select 1 from match_rounds mr where mr.match_id=m.id)
+      and (select count(*) from server_allocations sa
+        where sa.match_id=m.id and sa.status not in ('closed','failed'))<m.target_players`);
 }
 async function reserveRegisteredServer(client:any,region:string,build:string):Promise<RegisteredServerTarget|null>{
   for(let attempt=0;attempt<3;attempt+=1){
