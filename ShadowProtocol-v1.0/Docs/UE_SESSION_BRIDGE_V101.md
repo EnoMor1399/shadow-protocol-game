@@ -257,3 +257,16 @@ Heartbeat, drain, one-time admission, allocation release and authoritative match
 For production dedicated servers, registration now has a control-plane proof in addition to the bootstrap secret. The orchestrator injects `SP_NODE_ATTESTATION` into the dedicated-server process. `USPDedicatedServerBackendSubsystem` sends it only as `x-sp-node-attestation` during `POST /v1/servers/register`; it is not exposed through Blueprint or logs.
 
 The backend validates the signed server identity/region/build/public route/capacity and consumes the attestation id once. When registration reports that the attestation was consumed, the Unreal subsystem clears its in-memory copy. An attested server that later loses node authority fails closed and requires orchestrator relaunch with a new attestation rather than replaying the old proof.
+
+
+## Shared 5v5 roster authority
+
+The allocation/admission boundary now carries server-owned competitive roster authority.
+
+For production PostgreSQL matches, each allocation is assigned a round-1 slot before travel. The backend keeps a ten-player shared match roster and returns `slotIndex`, `team` and `tacticalSide`. The dedicated server receives the same metadata only after successful one-time admission.
+
+First-time admission in `ASPProtocolGameMode` validates the slot range and accepted team names, stores the slot in replicated `ASPPlayerState::CompetitiveSlotIndex`, and uses the backend-provided team. Connection order no longer decides first-time teams. `RefreshCompetitiveSlots()` preserves that authoritative index when building replicated ready-room slots.
+
+The current v1.0.1 solo assembly uses deterministic fixed sides: slots 0–4 are Directorate Nine / attack and slots 5–9 are Helix / defense. Party-preserving and skill-balanced team construction remain later matchmaking work; they must not be inferred as already implemented.
+
+Expired, unconsumed pre-admission reservations are removed from the pre-match roster, allowing a replacement allocation to reclaim the exact vacant slot without shifting existing players.

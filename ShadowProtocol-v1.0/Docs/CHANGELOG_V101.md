@@ -277,3 +277,19 @@ See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flo
 - Add persisted combat-HUD contrast, crosshair size/visibility and help-text options with a separate reset.
 - Add outlined reticle and replicated objective-status strip.
 - Engine build and rendered/readability verification remain pending.
+
+
+## Shared 5v5 PROTOCOL match assembly
+
+- Adds `v101_match_assembly.sql` with match assembly state, target-player count, assembly timestamps and indexes.
+- Production PostgreSQL allocation serializes matching by region/build/mode/map/ranked and fills the earliest compatible assembling match.
+- Ten solo allocations converge on one match id, one dedicated-server node and one ten-player capacity reservation set.
+- Duplicate active allocation requests from the same authenticated user fail with `409 active-allocation-exists`.
+- Backend assigns authoritative round-1 roster slots 0–9 at allocation time.
+- Slots 0–4 are `DirectorateNine` / attack; slots 5–9 are `Helix` / defense.
+- The tenth reservation promotes the match from `assembling` to `ready`.
+- Initial admission transactionally consumes the connect token and changes the assigned roster slot from disconnected to connected.
+- Admission returns round number, slot index, team and tactical side to the dedicated server.
+- Unreal stores the authoritative slot on `ASPPlayerState` and no longer derives first-time team assignment from connection order.
+- Expired unconsumed reservations release node capacity, remove the vacant pre-match roster slot and reopen the lobby for exact-slot replacement.
+- PostgreSQL integration tests validate one shared ten-user match, exact slots 0–9, 5/5 team split, replacement-slot recovery and overflow rejection.

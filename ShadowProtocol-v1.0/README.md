@@ -259,3 +259,23 @@ The orchestration signing secret remains outside the dedicated-server process. T
 ### Controls conflict-safe key swapping
 
 The native controls panel now supports confirmed atomic swaps for supported combat/tactics actions. Selecting a key already owned by another supported action shows the conflict and requires **Confirm key swap**. Confirmation exchanges both actions as one validated candidate; failure leaves the current bindings unchanged. Pending swap state is discarded on action changes, controls close and restore-default operations. Movement/look axes and reserved/menu/system keys remain protected.
+
+
+### Shared 5v5 PROTOCOL match assembly
+
+Production PostgreSQL allocation now assembles solo players into a shared ten-player Embassy / PROTOCOL match instead of creating one match per player. Allocation serializes assembly within a region/build/mode/map/ranked bucket, reserves capacity on one healthy dedicated-server node and fills the earliest compatible assembling match.
+
+Key rules:
+
+- one authenticated user may hold only one active allocation; duplicate allocation requests return `409 active-allocation-exists`;
+- the target roster is 10 players;
+- allocations 0–4 are backend-assigned to `DirectorateNine` / attack;
+- allocations 5–9 are backend-assigned to `Helix` / defense;
+- each allocation receives an authoritative slot index from 0–9;
+- the tenth valid reservation moves the match from `assembling` to `ready`;
+- `/v1/matches/admit` atomically consumes the one-time connection token and promotes that user's backend roster slot to `connected`;
+- Unreal uses the admitted backend slot/team rather than connection order to construct the competitive roster;
+- expired, unconsumed pre-admission reservations return node capacity, delete their vacant pre-match roster slot and reopen a full lobby so a replacement can reclaim the exact slot;
+- a full node does not overbook an eleventh player.
+
+The migration `Backend/db/v101_match_assembly.sql` adds match assembly state, target-player count, assembly timestamps and supporting indexes. PostgreSQL CI now builds a complete ten-user shared match, checks the 5/5 team split, verifies authoritative slots 0–9, expires a reservation, refills the exact vacant slot and confirms capacity remains bounded.
