@@ -226,6 +226,18 @@ async function reserveRegisteredServer(client:any,region:string,build:string):Pr
   }
   return null;
 }
+async function reserveSpecificRegisteredServer(client:any,nodeId:string):Promise<RegisteredServerTarget|null>{
+  const r=await client.query(`update game_server_nodes
+    set active_allocations=active_allocations+1,updated_at=now()
+    where id=$1 and status='ready'
+      and credential_revoked_at is null and credential_expires_at>now()
+      and last_heartbeat_at>now()-($2::double precision*interval '1 millisecond')
+      and active_allocations<capacity
+    returning id as node_id,server_id,public_host,public_port,capacity,active_allocations`,[nodeId,SERVER_HEARTBEAT_TTL_MS]);
+  if(!r.rowCount)return null;
+  const node=r.rows[0];
+  return {nodeId:node.node_id,serverId:node.server_id,host:node.public_host,port:Number(node.public_port),capacity:Number(node.capacity),activeAllocations:Number(node.active_allocations)};
+}
 
 app.get('/health', async () => ({
   service: 'shadow-protocol-backend', ok: true, version: BACKEND_PROTOCOL_VERSION,
@@ -379,41 +391,121 @@ app.post('/v1/auth/refresh',async(req,reply)=>{
 });
 
 const allocationSchema=z.object({region:z.string().min(2).max(16),mode:z.literal('PROTOCOL'),map:z.literal('EMBASSY'),ranked:z.boolean().default(true)});
+const PROTOCOL_TARGET_PLAYERS=10;
 app.post('/v1/matches/allocate',async(req,reply)=>{
   const session=requireCompatibleSession(req,reply);if(!session)return;
   const parsed=allocationSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(parsed.data.region!==session.region)return reply.code(409).send({error:'session-region-mismatch'});
-  const allocationId=crypto.randomUUID(),matchId=crypto.randomUUID();
+
+  const allocationId=crypto.randomUUID();
   const connectToken=randomBytes(24).toString('base64url'),connectHash=sha256(connectToken),expiresAt=Date.now()+120_000;
+
   if(pool){
     const client=await pool.connect();
     try{
       await client.query('begin');
+      const assemblyKey=`${parsed.data.region}|${session.build}|${parsed.data.mode}|${parsed.data.map}|${parsed.data.ranked?'1':'0'}`;
+      await client.query('select pg_advisory_xact_lock(hashtext($1))',[assemblyKey]);
       await cleanupExpiredServerReservations(client);
-      const registered=await reserveRegisteredServer(client,parsed.data.region,session.build);
-      let connectTarget:ConnectTarget;
-      let serverId:string;
-      let nodeId:string|null=null;
-      let allocator:'registry'|'static-dev';
-      if(registered){
-        connectTarget={host:registered.host,port:registered.port};serverId=registered.serverId;nodeId=registered.nodeId;allocator='registry';
-      }else{
-        if(IS_PRODUCTION){await client.query('rollback');return reply.code(503).send({error:'no-healthy-game-server',region:parsed.data.region,networkBuild:session.build,heartbeatTtlMs:SERVER_HEARTBEAT_TTL_MS});}
-        const fallback=getStaticConnectTarget();
-        if(!fallback){await client.query('rollback');return reply.code(503).send({error:'game-server-connect-target-not-configured'});}
-        connectTarget=fallback;serverId=`${parsed.data.region.toUpperCase()}-DEV-${randomBytes(2).toString('hex').toUpperCase()}`;allocator='static-dev';
+
+      const existingAllocation=await client.query(`select sa.id,sa.match_id
+        from server_allocations sa join matches m on m.id=sa.match_id
+        where sa.user_id=$1 and sa.status not in ('closed','failed') and m.ended_at is null
+        limit 1`,[session.uid]);
+      if(existingAllocation.rowCount){
+        await client.query('rollback');
+        return reply.code(409).send({error:'active-allocation-exists',allocationId:existingAllocation.rows[0].id,matchId:existingAllocation.rows[0].match_id});
       }
-      await client.query(`insert into matches(id,mode,map_code,region,ranked,server_build) values($1,$2,$3,$4,$5,$6)`,[matchId,parsed.data.mode,parsed.data.map,parsed.data.region,parsed.data.ranked,session.build]);
+
+      let matchId:string|null=null;
+      let connectTarget:ConnectTarget|null=null;
+      let serverId='';
+      let nodeId:string|null=null;
+      let allocator:'registry'|'static-dev'='registry';
+
+      const assembling=await client.query(`select m.id as match_id,m.target_players,
+          min(sa.server_id) as server_id,min(sa.node_id::text)::uuid as node_id,
+          min(sa.connect_host) as connect_host,min(sa.connect_port) as connect_port,
+          count(sa.id)::int as reserved_players
+        from matches m
+        join server_allocations sa on sa.match_id=m.id and sa.status not in ('closed','failed')
+        where m.mode=$1 and m.map_code=$2 and m.region=$3 and m.ranked=$4 and m.server_build=$5
+          and m.assembly_state='assembling' and m.ended_at is null
+        group by m.id,m.target_players,m.created_at
+        having count(sa.id)<m.target_players
+        order by m.created_at asc
+        limit 1`,[parsed.data.mode,parsed.data.map,parsed.data.region,parsed.data.ranked,session.build]);
+
+      if(assembling.rowCount&&assembling.rows[0].node_id){
+        const reserved=await reserveSpecificRegisteredServer(client,assembling.rows[0].node_id);
+        if(reserved){
+          matchId=assembling.rows[0].match_id;
+          connectTarget={host:reserved.host,port:reserved.port};
+          serverId=reserved.serverId;
+          nodeId=reserved.nodeId;
+        }
+      }
+
+      if(!matchId){
+        const registered=await reserveRegisteredServer(client,parsed.data.region,session.build);
+        if(registered){
+          connectTarget={host:registered.host,port:registered.port};
+          serverId=registered.serverId;
+          nodeId=registered.nodeId;
+          matchId=crypto.randomUUID();
+          await client.query(`insert into matches(id,mode,map_code,region,ranked,server_build,assembly_state,target_players)
+            values($1,$2,$3,$4,$5,$6,'assembling',$7)`,
+            [matchId,parsed.data.mode,parsed.data.map,parsed.data.region,parsed.data.ranked,session.build,PROTOCOL_TARGET_PLAYERS]);
+        }else{
+          if(IS_PRODUCTION){await client.query('rollback');return reply.code(503).send({error:'no-healthy-game-server',region:parsed.data.region,networkBuild:session.build,heartbeatTtlMs:SERVER_HEARTBEAT_TTL_MS});}
+          const fallback=getStaticConnectTarget();
+          if(!fallback){await client.query('rollback');return reply.code(503).send({error:'game-server-connect-target-not-configured'});}
+          connectTarget=fallback;
+          serverId=`${parsed.data.region.toUpperCase()}-DEV-${randomBytes(2).toString('hex').toUpperCase()}`;
+          allocator='static-dev';
+          matchId=crypto.randomUUID();
+          await client.query(`insert into matches(id,mode,map_code,region,ranked,server_build,assembly_state,target_players)
+            values($1,$2,$3,$4,$5,$6,'ready',1)`,
+            [matchId,parsed.data.mode,parsed.data.map,parsed.data.region,parsed.data.ranked,session.build]);
+        }
+      }
+
+      if(!connectTarget||!matchId)throw new Error('match assembly did not produce a connection target');
+
       await client.query(`insert into server_allocations(id,match_id,server_id,region,status,user_id,connect_token_hash,connect_host,connect_port,expires_at,node_id)
-        values($1,$2,$3,$4,'reserved',$5,$6,$7,$8,to_timestamp($9/1000.0),$10)`,[allocationId,matchId,serverId,parsed.data.region,session.uid,connectHash,connectTarget.host,connectTarget.port,expiresAt,nodeId]);
+        values($1,$2,$3,$4,'reserved',$5,$6,$7,$8,to_timestamp($9/1000.0),$10)`,
+        [allocationId,matchId,serverId,parsed.data.region,session.uid,connectHash,connectTarget.host,connectTarget.port,expiresAt,nodeId]);
+
+      const assembly=await client.query(`select m.target_players,count(sa.id)::int as reserved_players
+        from matches m
+        join server_allocations sa on sa.match_id=m.id and sa.status not in ('closed','failed')
+        where m.id=$1 group by m.id,m.target_players`,[matchId]);
+      const targetPlayers=Number(assembly.rows[0]?.target_players??1);
+      const reservedPlayers=Number(assembly.rows[0]?.reserved_players??1);
+      const assemblyState=reservedPlayers>=targetPlayers?'ready':'assembling';
+      await client.query(`update matches set assembly_state=$2,assembled_at=case when $2='ready' then coalesce(assembled_at,now()) else assembled_at end where id=$1`,[matchId,assemblyState]);
+
       await client.query('commit');
-      return reply.code(201).send({allocationId,matchId,serverId,region:parsed.data.region,tickRate:60,connectToken,connectHost:connectTarget.host,connectPort:connectTarget.port,expiresAt:new Date(expiresAt).toISOString(),networkBuild:session.build,backendProtocol:BACKEND_PROTOCOL_VERSION,allocator});
+      return reply.code(201).send({
+        allocationId,matchId,serverId,region:parsed.data.region,tickRate:60,connectToken,
+        connectHost:connectTarget.host,connectPort:connectTarget.port,expiresAt:new Date(expiresAt).toISOString(),
+        networkBuild:session.build,backendProtocol:BACKEND_PROTOCOL_VERSION,allocator,
+        matchAssembly:{state:assemblyState,targetPlayers,reservedPlayers}
+      });
     }catch(error){await client.query('rollback');throw error;}finally{client.release();}
   }
+
+  const matchId=crypto.randomUUID();
   const connectTarget=requireConnectTarget(reply);if(!connectTarget)return;
   const serverId=`${parsed.data.region.toUpperCase()}-DEV-${randomBytes(2).toString('hex').toUpperCase()}`;
-  return reply.code(201).send({allocationId,matchId,serverId,region:parsed.data.region,tickRate:60,connectToken,connectHost:connectTarget.host,connectPort:connectTarget.port,expiresAt:new Date(expiresAt).toISOString(),networkBuild:session.build,backendProtocol:BACKEND_PROTOCOL_VERSION,allocator:'static-dev'});
+  return reply.code(201).send({
+    allocationId,matchId,serverId,region:parsed.data.region,tickRate:60,connectToken,
+    connectHost:connectTarget.host,connectPort:connectTarget.port,expiresAt:new Date(expiresAt).toISOString(),
+    networkBuild:session.build,backendProtocol:BACKEND_PROTOCOL_VERSION,allocator:'static-dev',
+    matchAssembly:{state:'ready',targetPlayers:1,reservedPlayers:1}
+  });
 });
+
 
 const admissionSchema=z.object({allocationId:z.string().uuid(),matchId:z.string().uuid(),connectToken:z.string().min(24).max(256),reconnectGrantId:z.string().uuid().optional(),roundNumber:z.number().int().min(1).max(9).optional()});
 app.post('/v1/matches/admit',async(req,reply)=>{

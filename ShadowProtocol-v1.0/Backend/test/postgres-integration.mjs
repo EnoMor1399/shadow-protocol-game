@@ -62,6 +62,17 @@ async function bootstrapPost(path, body, attestation = '') {
 async function nodePost(path, body, serverId, nodeCredential) {
   return fetch(`${BASE_URL}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-sp-server-id': serverId, 'x-sp-node-credential': nodeCredential }, body: JSON.stringify(body) });
 }
+async function createPlayerSession(userId, email, region, nonce) {
+  await db.query(`insert into users(id,email,status,trust_score) values($1,$2,'active',88)
+    on conflict(id) do update set email=excluded.email,status='active',trust_score=88`,[userId,email]);
+  const response=await fetch(`${BASE_URL}/v1/auth/game-session`,{
+    method:'POST',
+    headers:{'content-type':'application/json','x-session-bootstrap-secret':BOOTSTRAP_SECRET},
+    body:JSON.stringify({userId,region,build:'SP-1.0.1',deviceNonce:nonce})
+  });
+  assert.equal(response.status,201);
+  return response.json();
+}
 
 before(async () => {
   assert.ok(DATABASE_URL, 'DATABASE_URL must be provided to the PostgreSQL integration test.');
@@ -236,9 +247,20 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   assert.ok(primaryLoad.rows[0].last_attestation_id);
   assert.ok(primaryLoad.rows[0].last_attested_at);
 
-  const saturatedResponse = await fetch(`${BASE_URL}/v1/matches/allocate`, {
+  const duplicateResponse = await fetch(`${BASE_URL}/v1/matches/allocate`, {
     method: 'POST',
     headers: playerHeaders,
+    body: JSON.stringify({ region: 'acc', mode: 'PROTOCOL', map: 'EMBASSY', ranked: true })
+  });
+  assert.equal(duplicateResponse.status, 409);
+  const duplicate = await duplicateResponse.json();
+  assert.equal(duplicate.error, 'active-allocation-exists');
+
+  const capacityUser='55555555-5555-4555-8555-555555555555';
+  const capacitySession=await createPlayerSession(capacityUser,'capacity-test@shadow-protocol.test','acc','capacity-test-device-nonce');
+  const saturatedResponse = await fetch(`${BASE_URL}/v1/matches/allocate`, {
+    method: 'POST',
+    headers: { 'content-type':'application/json', authorization:`Bearer ${capacitySession.sessionToken}` },
     body: JSON.stringify({ region: 'acc', mode: 'PROTOCOL', map: 'EMBASSY', ranked: true })
   });
   assert.equal(saturatedResponse.status, 503);
@@ -487,4 +509,73 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
 
   const releasedNode = await db.query(`select active_allocations from game_server_nodes where server_id=$1`, [PRIMARY_SERVER_ID]);
   assert.equal(Number(releasedNode.rows[0].active_allocations), 0);
+});
+
+
+test('assembles ten solo allocations into one shared 5v5 Protocol match', async () => {
+  const serverBody={
+    serverId:'LAB-TEN',
+    region:'lab',
+    networkBuild:'SP-1.0.1',
+    publicHost:'10.20.0.10',
+    publicPort:7790,
+    capacity:10
+  };
+  const registration=await bootstrapPost('/v1/servers/register',serverBody,issueServerAttestation(serverBody));
+  assert.equal(registration.status,200);
+  const node=await registration.json();
+
+  const allocations=[];
+  for(let index=0;index<10;index+=1){
+    const suffix=String(index).padStart(2,'0');
+    const userId=`60000000-0000-4000-8000-0000000000${suffix}`;
+    const session=await createPlayerSession(userId,`assembly-${index}@shadow-protocol.test`,'lab',`assembly-device-nonce-${index}`);
+    const response=await fetch(`${BASE_URL}/v1/matches/allocate`,{
+      method:'POST',
+      headers:{'content-type':'application/json',authorization:`Bearer ${session.sessionToken}`},
+      body:JSON.stringify({region:'lab',mode:'PROTOCOL',map:'EMBASSY',ranked:true})
+    });
+    assert.equal(response.status,201);
+    const allocation=await response.json();
+    assert.equal(allocation.serverId,'LAB-TEN');
+    assert.equal(allocation.matchAssembly.targetPlayers,10);
+    assert.equal(allocation.matchAssembly.reservedPlayers,index+1);
+    assert.equal(allocation.matchAssembly.state,index===9?'ready':'assembling');
+    allocations.push(allocation);
+  }
+
+  assert.equal(new Set(allocations.map(a=>a.matchId)).size,1);
+  assert.equal(new Set(allocations.map(a=>a.serverId)).size,1);
+  const sharedMatchId=allocations[0].matchId;
+
+  const match=await db.query('select assembly_state,target_players,assembled_at from matches where id=$1',[sharedMatchId]);
+  assert.equal(match.rowCount,1);
+  assert.equal(match.rows[0].assembly_state,'ready');
+  assert.equal(Number(match.rows[0].target_players),10);
+  assert.ok(match.rows[0].assembled_at);
+
+  const persisted=await db.query(`select count(*)::int as allocations,count(distinct user_id)::int as users,
+    count(distinct server_id)::int as servers,count(distinct node_id)::int as nodes
+    from server_allocations where match_id=$1 and status='reserved'`,[sharedMatchId]);
+  assert.equal(Number(persisted.rows[0].allocations),10);
+  assert.equal(Number(persisted.rows[0].users),10);
+  assert.equal(Number(persisted.rows[0].servers),1);
+  assert.equal(Number(persisted.rows[0].nodes),1);
+
+  const load=await db.query('select active_allocations from game_server_nodes where server_id=$1',['LAB-TEN']);
+  assert.equal(Number(load.rows[0].active_allocations),10);
+
+  const overflowUser='70000000-0000-4000-8000-000000000000';
+  const overflowSession=await createPlayerSession(overflowUser,'assembly-overflow@shadow-protocol.test','lab','assembly-overflow-device-nonce');
+  const overflow=await fetch(`${BASE_URL}/v1/matches/allocate`,{
+    method:'POST',
+    headers:{'content-type':'application/json',authorization:`Bearer ${overflowSession.sessionToken}`},
+    body:JSON.stringify({region:'lab',mode:'PROTOCOL',map:'EMBASSY',ranked:true})
+  });
+  assert.equal(overflow.status,503);
+  assert.equal((await overflow.json()).error,'no-healthy-game-server');
+
+  // The server credential remains valid after ten atomic reservations.
+  const heartbeat=await nodePost('/v1/servers/heartbeat',{serverId:'LAB-TEN',status:'ready'},'LAB-TEN',node.nodeCredential);
+  assert.equal(heartbeat.status,200);
 });
