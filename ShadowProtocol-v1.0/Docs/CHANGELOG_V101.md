@@ -293,3 +293,11 @@ See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flo
 - Unreal stores the authoritative slot on `ASPPlayerState` and no longer derives first-time team assignment from connection order.
 - Expired unconsumed reservations release node capacity, remove the vacant pre-match roster slot and reopen the lobby for exact-slot replacement.
 - PostgreSQL integration tests validate one shared ten-user match, exact slots 0–9, 5/5 team split, replacement-slot recovery and overflow rejection.
+
+
+## Dedicated-server match isolation
+
+- New match creation now requires an idle healthy node with `active_allocations=0`.
+- Remaining node capacity can be consumed only by players joining the already-selected assembling match.
+- Prevents a partially occupied UE dedicated-server process from hosting a second ranked/unranked match concurrently.
+- PostgreSQL integration includes a regression case that attempts to start a competing match while a ten-player node is partially occupied and verifies `503 no-healthy-game-server`.

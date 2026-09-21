@@ -279,3 +279,8 @@ Key rules:
 - a full node does not overbook an eleventh player.
 
 The migration `Backend/db/v101_match_assembly.sql` adds match assembly state, target-player count, assembly timestamps and supporting indexes. PostgreSQL CI now builds a complete ten-user shared match, checks the 5/5 team split, verifies authoritative slots 0–9, expires a reservation, refills the exact vacant slot and confirms capacity remains bounded.
+
+
+### Dedicated-server match isolation
+
+A registered Unreal dedicated-server process is now reserved to **one active match at a time**. Starting a new match requires an otherwise healthy node with `active_allocations=0`. Once a match has claimed that node, only additional allocations joining that same assembling match may consume its remaining player capacity. This prevents separate ranked/unranked matches from being routed to one UE process simultaneously.
