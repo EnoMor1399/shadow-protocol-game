@@ -2,6 +2,7 @@
 #include "SPControlSettings.h"
 #include "SPObserverPlayerController.h"
 #include "SPCharacter.h"
+#include "SPPlayerState.h"
 #include "SPHealthComponent.h"
 #include "SPWeaponBase.h"
 #include "SPProtocolGameState.h"
@@ -33,7 +34,7 @@ void ASPCombatHUD::DrawHUD()
     Rect(W / 2 - 240, 20, 480, 80, Panel);
     Text(FString::Printf(TEXT("D9  %d   |   ROUND %d   |   %d  HELIX"), GS->DirectorateRoundWins, GS->RoundNumber, GS->HelixRoundWins), W / 2 - 215, 30, FLinearColor::White);
     Text(FString::Printf(TEXT("%s   %02d:%02d"), Phase, Seconds / 60, Seconds % 60), W / 2 - 215, 64, Accent);
-    if (Settings->bShowHUDHints) Text(TEXT("Esc  Controls & HUD settings"), 24, 112, FLinearColor::White, 0.85f);
+    if (Settings->bShowHUDHints) Text(TEXT("Esc  Settings  /  Hold F2  Scoreboard"), 24, 112, FLinearColor::White, 0.85f);
     const TCHAR* Objective = GS->bMatchComplete ? TEXT("Match finished")
         : GS->RoundState == ESPRoundState::Waiting ? TEXT("Awaiting team readiness")
         : GS->RoundState == ESPRoundState::PostRound ? TEXT("Round finished / Await next round")
@@ -42,6 +43,54 @@ void ASPCombatHUD::DrawHUD()
         : GS->bTrueObjectiveRevealed ? TEXT("Objective identified") : TEXT("Locate intelligence");
     Rect(W / 2 - 240, 108, 480, 34, Panel);
     Text(Objective, W / 2 - 215, 114, Accent, 0.9f);
+    if (PC->IsScoreboardHeld() || GS->bMatchComplete)
+    {
+        // Read only replicated roster/statistics; no pawn positions, health or account IDs.
+        const auto* LocalPlayer = PC->GetPlayerState<ASPPlayerState>();
+        TArray<FSPCompetitivePlayerSlot> Slots = GS->PlayerSlots;
+        Slots.Sort([](const FSPCompetitivePlayerSlot& A, const FSPCompetitivePlayerSlot& B)
+            { return A.SlotIndex < B.SlotIndex; });
+        const float BoardY = 170.f;
+        const auto TeamColumn = [&](ESPTeam Team, float Left, const TCHAR* Name)
+        {
+            Rect(Left, BoardY, 500, 370, Panel);
+            Text(FString::Printf(TEXT("%s / %s"), Name, GS->AttackingTeam == Team ? TEXT("ATTACK") : TEXT("DEFEND")), Left + 16, BoardY + 14, Accent);
+            Text(TEXT("PLAYER"), Left + 16, BoardY + 49, FLinearColor::White, 0.8f);
+            Text(TEXT("K / D / A"), Left + 290, BoardY + 49, FLinearColor::White, 0.8f);
+            Text(TEXT("SCORE"), Left + 422, BoardY + 49, FLinearColor::White, 0.8f);
+            int32 Row = 0;
+            for (const auto& Slot : Slots)
+            {
+                if (Slot.Team != Team || Row >= 5) continue;
+                const float Y = BoardY + 80 + Row * 55;
+                const ASPPlayerState* Stats = nullptr;
+                for (const APlayerState* Base : GS->PlayerArray)
+                {
+                    const auto* Candidate = Cast<ASPPlayerState>(Base);
+                    if (Candidate && Candidate->GetPlayerId() == Slot.PlayerId) { Stats = Candidate; break; }
+                }
+                const bool bSelf = LocalPlayer && LocalPlayer->GetPlayerId() == Slot.PlayerId;
+                if (bSelf) Rect(Left + 8, Y - 3, 484, 50, FLinearColor(0.12f, 0.2f, 0.24f, 1.f));
+                FString NameText = Slot.Callsign.Replace(TEXT("\n"), TEXT(" ")).Replace(TEXT("\r"), TEXT(" ")).Replace(TEXT("\t"), TEXT(" "));
+                if (NameText.IsEmpty()) NameText = TEXT("Player");
+                if (NameText.Len() > 18) NameText = NameText.Left(17) + TEXT("...");
+                Text((bSelf ? TEXT("> ") : TEXT("")) + NameText, Left + 16, Y, FLinearColor::White, 0.85f);
+                const TCHAR* State = Slot.ConnectionState == ESPConnectionState::Reconnecting ? TEXT("Reconnecting")
+                    : Slot.ConnectionState == ESPConnectionState::Disconnected ? TEXT("Disconnected")
+                    : GS->bMatchComplete ? TEXT("Match complete") : TEXT("Connected");
+                Text(State, Left + 16, Y + 23, Accent, 0.7f);
+                Text(Stats ? FString::Printf(TEXT("%d / %d / %d"), Stats->Eliminations, Stats->Deaths, Stats->Assists) : TEXT("-- / -- / --"), Left + 290, Y, FLinearColor::White, 0.8f);
+                Text(Stats ? FString::FromInt(Stats->TacticalScore) : TEXT("--"), Left + 422, Y, FLinearColor::White, 0.8f);
+                ++Row;
+            }
+            if (Row == 0) Text(TEXT("Waiting for players..."), Left + 16, BoardY + 88, FLinearColor::White, 0.8f);
+        };
+        TeamColumn(ESPTeam::DirectorateNine, W / 2 - 520, TEXT("DIRECTORATE NINE"));
+        TeamColumn(ESPTeam::Helix, W / 2 + 20, TEXT("HELIX"));
+        Text(GS->bMatchComplete ? TEXT("FINAL ROSTER / Disconnected player statistics may be unavailable")
+            : TEXT("Release F2 to return / Gameplay continues"), W / 2 - 520, BoardY + 385, Accent, 0.8f);
+        return;
+    }
     const auto* Pawn = Cast<ASPCharacter>(PC->GetPawn());
     if (!Pawn || !Pawn->Health)
     {

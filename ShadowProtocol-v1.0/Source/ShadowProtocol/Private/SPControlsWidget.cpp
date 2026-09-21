@@ -95,6 +95,7 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
         auto* ResetHUD = Button(TEXT("Reset HUD preferences"));
         ResetHUD->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ResetHUDPreferences);
         Label(TEXT("HUD changes appear when you return to play. Objective and player status remain visible when help text is hidden."), 16, FLinearColor::White);
+        Label(TEXT("Hold F2 in gameplay for the scoreboard. The match continues while viewing it."), 16, FLinearColor::White);
         Label(TEXT("MOVEMENT"), 20, FLinearColor(0.35f, 0.85f, 0.8f));
         const UInputSettings* Input = GetDefault<UInputSettings>();
         struct FControlHint { const TCHAR* Mapping; const TCHAR* Label; };

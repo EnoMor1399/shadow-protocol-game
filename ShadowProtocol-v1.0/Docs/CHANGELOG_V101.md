@@ -301,3 +301,10 @@ See `UE_SESSION_BRIDGE_V101.md` for the secure Unreal-to-backend integration flo
 - Remaining node capacity can be consumed only by players joining the already-selected assembling match.
 - Prevents a partially occupied UE dedicated-server process from hosting a second ranked/unranked match concurrently.
 - PostgreSQL integration includes a regression case that attempts to start a competing match while a ten-player node is partially occupied and verifies `503 no-healthy-game-server`.
+
+## Native 5v5 scoreboard
+
+- Add hold-F2 team scoreboard with local-player highlight, K/D/A, tactical score and connection labels.
+- Show final roster on match completion; mark unavailable statistics explicitly.
+- Clear held scoreboard state at menu transitions and preserve current 5v5 match assembly work.
+- Add a source contract; packaged Unreal validation remains pending.

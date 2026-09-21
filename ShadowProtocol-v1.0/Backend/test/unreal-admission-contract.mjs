@@ -317,3 +317,17 @@ test('shared 5v5 admission preserves backend roster slot and team authority', as
   const promote = mode.split('void ASPProtocolGameMode::PromoteAdmittedPlayer')[1].split('void ASPProtocolGameMode::HandleBackendAdmissionFailed')[0];
   assert.doesNotMatch(promote, /AssignCompetitiveTeam\(PS\)/);
 });
+
+test('scoreboard is local, read-only and releases when a modal opens', async () => {
+  const controller = await source('../../Source/ShadowProtocol/Private/SPObserverPlayerController.cpp');
+  const hud = await source('../../Source/ShadowProtocol/Private/SPCombatHUD.cpp');
+  const input = await source('../../Config/DefaultInput.ini');
+  assert.match(input, /ActionName="Scoreboard",Key=F2/);
+  assert.match(controller, /"Scoreboard",IE_Pressed/);
+  assert.match(controller, /"Scoreboard",IE_Released/);
+  const modal = controller.split('void ASPObserverPlayerController::ApplyInterfaceInputMode()')[1];
+  assert.match(modal, /bScoreboardHeld = false/);
+  const board = hud.split('if (PC->IsScoreboardHeld() || GS->bMatchComplete)')[1].split('const auto* Pawn')[0];
+  for (const field of ['PlayerSlots', 'SlotIndex', 'Eliminations', 'Deaths', 'Assists', 'TacticalScore', 'Reconnecting']) assert.ok(board.includes(field));
+  assert.doesNotMatch(board, /AuthenticatedUserId|AuthenticatedSessionId|GetActorLocation|Server\w+\(/);
+});

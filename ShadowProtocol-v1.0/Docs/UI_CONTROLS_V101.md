@@ -138,3 +138,25 @@ still suppress the crosshair while downed, eliminated, sprinting or without a we
 UE visual checks remain required: contrast on bright/dark maps, crosshair sizes and
 visibility, small/ultrawide viewports, menu close/reopen and restart persistence,
 separate resets, and objective text across waiting/preparation/action/post-round.
+
+## 5v5 scoreboard
+
+Hold F2 during gameplay to view the two team rosters, K/D/A and tactical scores.
+Release F2 to return. This is a read-only overlay: movement and gameplay continue,
+no mouse capture or pause is added. Opening a modal clears the held scoreboard
+state; closing settings cannot leave it stuck open. The final roster appears
+automatically at match completion and remains accessible without a pawn.
+
+Rows use authoritative slot order, highlight the local player and show explicit
+connection state. Statistics come from replicated PlayerStates. Reserved slots
+without a current PlayerState show `--`, not invented zero statistics; durable
+post-match/disconnected-player result storage remains separate work. Names are
+length-limited and stripped of line breaks/tabs for layout. The overlay exposes no
+positions, health or backend account/session IDs. HUD high contrast applies.
+
+F2 is a fixed scoreboard binding in this pass and is unavailable as a conflicting
+combat rebind. Tab remains available for menu navigation and the future tactical
+map. Verify two-client score replication, reconnect/missing-PlayerState rows,
+match completion without a pawn, F2 hold/release and Escape transitions, and
+720p/1080p/ultrawide layout in UE. Engine compilation/rendering remain unverified
+in this environment; CI checks source wiring and existing regression suites.

@@ -17,6 +17,8 @@ void ASPObserverPlayerController::SetupInputComponent()
     Super::SetupInputComponent();
     if(InputComponent)
     {
+        InputComponent->BindAction("Scoreboard",IE_Pressed,this,&ASPObserverPlayerController::ShowScoreboard);
+        InputComponent->BindAction("Scoreboard",IE_Released,this,&ASPObserverPlayerController::HideScoreboard);
         InputComponent->BindAction("Controls",IE_Pressed,this,&ASPObserverPlayerController::ToggleControls);
         InputComponent->BindAction("ObserverNext",IE_Pressed,this,&ASPObserverPlayerController::CycleObserverNext);
         InputComponent->BindAction("ObserverFree",IE_Pressed,this,&ASPObserverPlayerController::ToggleFreeObserver);
@@ -204,6 +206,7 @@ void ASPObserverPlayerController::ToggleControls()
 }
 void ASPObserverPlayerController::ApplyInterfaceInputMode()
 {
+    bScoreboardHeld = false;
     // Release hold actions before the UI starts consuming key-up events.
     if (auto* Character = Cast<ASPCharacter>(GetPawn())) Character->ReleaseHeldControls();
     if (PlayerInput) PlayerInput->FlushPressedKeys();
@@ -224,4 +227,13 @@ void ASPObserverPlayerController::ApplyInterfaceInputMode()
         Focus->SetKeyboardFocus();
     }
     else SetInputMode(FInputModeGameOnly());
+}
+
+void ASPObserverPlayerController::ShowScoreboard()
+{
+    if (IsLocalController() && !IsGameplayInputBlocked()) bScoreboardHeld = true;
+}
+void ASPObserverPlayerController::HideScoreboard()
+{
+    bScoreboardHeld = false;
 }

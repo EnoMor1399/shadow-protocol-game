@@ -24,6 +24,7 @@ public:
     UFUNCTION(BlueprintCallable, Category="Controls") void ToggleControls();
     UFUNCTION(BlueprintPure, Category="Controls") bool IsGameplayInputBlocked() const { return bControlsOpen || bReadyRoomInputActive; }
     UFUNCTION(BlueprintPure, Category="Controls") bool AreControlsOpen() const { return bControlsOpen; }
+    bool IsScoreboardHeld() const { return bScoreboardHeld; }
     float GetMouseSensitivity() const { return MouseSensitivity; }
     bool IsMouseYInverted() const { return bInvertMouseY; }
     void SetMouseSensitivity(float Value);
@@ -56,6 +57,9 @@ protected:
     void ApplyInterfaceInputMode();
     void SaveControlSettings();
     virtual void SetupInputComponent() override;
+    bool bScoreboardHeld = false;
+    void ShowScoreboard();
+    void HideScoreboard();
     void CycleObserverNext();
     void ToggleFreeObserver();
 };
