@@ -223,14 +223,14 @@ async function reserveRegisteredServer(client:any,region:string,build:string):Pr
       where region=$1 and network_build=$2 and status='ready'
         and credential_revoked_at is null and credential_expires_at>now()
         and last_heartbeat_at>now()-($3::double precision*interval '1 millisecond')
-        and active_allocations<capacity
-      order by active_allocations::numeric/nullif(capacity,0),last_heartbeat_at desc,server_id
+        and active_allocations=0
+      order by last_heartbeat_at desc,server_id
       limit 1
     )
     update game_server_nodes n
     set active_allocations=n.active_allocations+1,updated_at=now()
     from candidate c
-    where n.id=c.id and n.active_allocations<n.capacity
+    where n.id=c.id and n.active_allocations=0
     returning n.id as node_id,n.server_id,n.public_host,n.public_port,n.capacity,n.active_allocations`,[region,build,SERVER_HEARTBEAT_TTL_MS]);
     if(r.rowCount){
       const node=r.rows[0];

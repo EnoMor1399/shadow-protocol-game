@@ -552,6 +552,23 @@ test('assembles ten solo allocations into one shared 5v5 Protocol match', async 
     assert.equal(allocation.team,index<5?'DirectorateNine':'Helix');
     assert.equal(allocation.tacticalSide,index<5?'attack':'defense');
     allocations.push(allocation);
+
+    if(index===2){
+      const competingUser='65000000-0000-4000-8000-000000000000';
+      const competingSession=await createPlayerSession(
+        competingUser,
+        'parallel-match@shadow-protocol.test',
+        'lab',
+        'parallel-match-device-nonce'
+      );
+      const competing=await fetch(`${BASE_URL}/v1/matches/allocate`,{
+        method:'POST',
+        headers:{'content-type':'application/json',authorization:`Bearer ${competingSession.sessionToken}`},
+        body:JSON.stringify({region:'lab',mode:'PROTOCOL',map:'EMBASSY',ranked:false})
+      });
+      assert.equal(competing.status,503);
+      assert.equal((await competing.json()).error,'no-healthy-game-server');
+    }
   }
 
   assert.equal(new Set(allocations.map(a=>a.matchId)).size,1);
