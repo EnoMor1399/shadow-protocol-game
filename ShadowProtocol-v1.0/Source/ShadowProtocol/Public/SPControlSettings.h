@@ -23,5 +23,6 @@ public:
     bool FindActionUsingKey(FKey Key, FName ExcludingAction, FName& OutAction) const;
     bool SwapActionBinding(FName Action, FName ConflictingAction, FKey NewKey, FString& Error);
     void ResetActionBindings();
+    static FString GetActionKeyLabel(FName Action);
     static bool CanRebindAction(FName Action);
 };

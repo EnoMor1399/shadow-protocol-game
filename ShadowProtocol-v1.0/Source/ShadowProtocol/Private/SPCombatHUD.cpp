@@ -34,7 +34,7 @@ void ASPCombatHUD::DrawHUD()
     Rect(W / 2 - 240, 20, 480, 80, Panel);
     Text(FString::Printf(TEXT("D9  %d   |   ROUND %d   |   %d  HELIX"), GS->DirectorateRoundWins, GS->RoundNumber, GS->HelixRoundWins), W / 2 - 215, 30, FLinearColor::White);
     Text(FString::Printf(TEXT("%s   %02d:%02d"), Phase, Seconds / 60, Seconds % 60), W / 2 - 215, 64, Accent);
-    if (Settings->bShowHUDHints) Text(TEXT("Esc  Settings  /  Hold F2  Scoreboard"), 24, 112, FLinearColor::White, 0.85f);
+    if (Settings->bShowHUDHints) Text(FString::Printf(TEXT("Esc  Settings  /  Hold %s  Scoreboard"), *USPControlSettings::GetActionKeyLabel(TEXT("Scoreboard"))), 24, 112, FLinearColor::White, 0.85f);
     const TCHAR* Objective = GS->bMatchComplete ? TEXT("Match finished")
         : GS->RoundState == ESPRoundState::Waiting ? TEXT("Awaiting team readiness")
         : GS->RoundState == ESPRoundState::PostRound ? TEXT("Round finished / Await next round")
@@ -88,7 +88,7 @@ void ASPCombatHUD::DrawHUD()
         TeamColumn(ESPTeam::DirectorateNine, W / 2 - 520, TEXT("DIRECTORATE NINE"));
         TeamColumn(ESPTeam::Helix, W / 2 + 20, TEXT("HELIX"));
         Text(GS->bMatchComplete ? TEXT("FINAL ROSTER / Disconnected player statistics may be unavailable")
-            : TEXT("Release F2 to return / Gameplay continues"), W / 2 - 520, BoardY + 385, Accent, 0.8f);
+            : FString::Printf(TEXT("Release %s to return / Gameplay continues"), *USPControlSettings::GetActionKeyLabel(TEXT("Scoreboard"))), W / 2 - 520, BoardY + 385, Accent, 0.8f);
         return;
     }
     const auto* Pawn = Cast<ASPCharacter>(PC->GetPawn());

@@ -160,3 +160,7 @@ map. Verify two-client score replication, reconnect/missing-PlayerState rows,
 match completion without a pawn, F2 hold/release and Escape transitions, and
 720p/1080p/ultrawide layout in UE. Engine compilation/rendering remain unverified
 in this environment; CI checks source wiring and existing regression suites.
+
+### Scoreboard binding continuation
+
+The scoreboard action now supports saved keyboard/mouse rebinding and confirmed swaps. F2 remains the default. HUD hold/release prompts read current action mappings, including modifier labels for project defaults. Reset restores the original mapping. UE validation pending: rebind scoreboard, swap with a combat action, reopen settings, restart client, and check hold/release and menu cleanup with the new key.

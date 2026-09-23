@@ -95,7 +95,7 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
         auto* ResetHUD = Button(TEXT("Reset HUD preferences"));
         ResetHUD->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ResetHUDPreferences);
         Label(TEXT("HUD changes appear when you return to play. Objective and player status remain visible when help text is hidden."), 16, FLinearColor::White);
-        Label(TEXT("Hold F2 in gameplay for the scoreboard. The match continues while viewing it."), 16, FLinearColor::White);
+        Label(TEXT("Hold the scoreboard binding in gameplay to view team statistics. The match continues while viewing it."), 16, FLinearColor::White);
         Label(TEXT("MOVEMENT"), 20, FLinearColor(0.35f, 0.85f, 0.8f));
         const UInputSettings* Input = GetDefault<UInputSettings>();
         struct FControlHint { const TCHAR* Mapping; const TCHAR* Label; };
@@ -127,7 +127,7 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
         ConfirmSwapButton->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ConfirmPendingSwap);
         auto* Restore = Button(TEXT("Restore original action bindings"));
         Restore->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ResetBindings);
-        // Only list implemented pawn controls. Config-only actions are not advertised.
+        // Only list implemented player controls. Config-only actions are not advertised.
         for (const FControlHint& Hint : {
             FControlHint{TEXT("Fire"), TEXT("Fire (single press)")}, FControlHint{TEXT("Aim"), TEXT("Aim (hold)")},
             FControlHint{TEXT("Reload"), TEXT("Reload")}, FControlHint{TEXT("Crouch"), TEXT("Crouch / silent movement (hold)")},
@@ -135,7 +135,8 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
             FControlHint{TEXT("LeanRight"), TEXT("Lean right (hold)")}, FControlHint{TEXT("Vault"), TEXT("Vault low obstacle")},
             FControlHint{TEXT("CycleEquipment"), TEXT("Select equipment")}, FControlHint{TEXT("ThrowEquipment"), TEXT("Throw equipment")},
             FControlHint{TEXT("CycleOptic"), TEXT("Switch optic")}, FControlHint{TEXT("SquadOrder"), TEXT("Cycle squad order")},
-            FControlHint{TEXT("Fortify"), TEXT("Fortify marked point")}})
+            FControlHint{TEXT("Fortify"), TEXT("Fortify marked point")},
+            FControlHint{TEXT("Scoreboard"), TEXT("Scoreboard (hold)")}})
         {
             FString Keys;
             for (const auto& Mapping : Input->GetActionMappings())

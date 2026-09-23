@@ -24,7 +24,7 @@ bool USPControlSettings::CanRebindAction(FName Action)
 {
     static const TArray<FName> Allowed = {TEXT("Fire"), TEXT("Aim"), TEXT("Reload"), TEXT("Crouch"),
         TEXT("Sprint"), TEXT("LeanLeft"), TEXT("LeanRight"), TEXT("Vault"), TEXT("CycleEquipment"),
-        TEXT("ThrowEquipment"), TEXT("CycleOptic"), TEXT("SquadOrder"), TEXT("Fortify")};
+        TEXT("ThrowEquipment"), TEXT("CycleOptic"), TEXT("SquadOrder"), TEXT("Fortify"), TEXT("Scoreboard")};
     return Allowed.Contains(Action);
 }
 
@@ -157,4 +157,22 @@ void USPControlSettings::ResetActionBindings()
 float USPControlSettings::GetSafeCrosshairScale() const
 {
     return FMath::IsFinite(CrosshairScale) ? FMath::Clamp(CrosshairScale, 0.75f, 2.5f) : 1.f;
+}
+
+FString USPControlSettings::GetActionKeyLabel(FName Action)
+{
+    FString Label;
+    for (const auto& Mapping : GetDefault<UInputSettings>()->GetActionMappings())
+    {
+        if (Mapping.ActionName != Action || Mapping.Key.IsGamepadKey()) continue;
+        FString Key;
+        if (Mapping.bCtrl) Key += TEXT("Ctrl+");
+        if (Mapping.bAlt) Key += TEXT("Alt+");
+        if (Mapping.bShift) Key += TEXT("Shift+");
+        if (Mapping.bCmd) Key += TEXT("Cmd+");
+        Key += Mapping.Key.GetDisplayName().ToString();
+        if (!Label.IsEmpty()) Label += TEXT(" / ");
+        Label += Key;
+    }
+    return Label.IsEmpty() ? TEXT("Unbound") : Label;
 }
