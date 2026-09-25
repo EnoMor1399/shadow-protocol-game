@@ -25,7 +25,7 @@ public:
     bool ApplyActionOverrides(FString& Error);
     bool RebindAction(FName Action, FKey Key, FString& Error);
     bool FindActionUsingKey(FKey Key, FName ExcludingAction, FName& OutAction) const;
-    bool SwapActionBinding(FName Action, FName ConflictingAction, FKey NewKey, FString& Error);
+    bool SwapActionBinding(FName Action, FName ConflictingAction, FKey NewKey, FString& Error, bool bSaveSettings = true);
     void ResetActionBindings();
     static FString GetActionKeyLabel(FName Action);
     static bool CanRebindAction(FName Action);

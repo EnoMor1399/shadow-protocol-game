@@ -182,3 +182,7 @@ Added a saved aim sensitivity multiplier (0.10–1.00x normal mouse sensitivity)
 ### Toggle aiming
 
 Added saved toggle aiming (default off). First aim press enters aim, second exits; release exits only in hold mode. Menu and incapacitation cleanup call unconditional EndAim, so toggle cannot retain aim through control loss. Aim still cancels sprint and uses the saved aim-sensitivity multiplier. Mouse reset restores hold aiming; HUD/key resets preserve the preference. UE runtime checks pending: hold/toggle presses and releases, sprint conflict, menu open/close, downing/recovery, saved restart behavior and mouse reset.
+
+### Preserve alternate bindings during swaps
+
+Confirmed swaps now require exactly one unmodified keyboard/mouse binding per action. Multiple bindings and modifier chords are rejected before mutation, preserving both actions and saved overrides. Gamepad alternatives are excluded from this count and retained. Direct single-key reassignment remains an explicit replacement. The Unreal atomic-rebinding test now disables persistence for swaps and checks alternate keys on either action plus modifier-chord rejection. Engine test execution remains pending; source checks are not a substitute for Unreal automation.

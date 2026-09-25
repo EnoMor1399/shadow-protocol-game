@@ -98,7 +98,7 @@ bool USPControlSettings::FindActionUsingKey(FKey Key, FName ExcludingAction, FNa
     return false;
 }
 
-bool USPControlSettings::SwapActionBinding(FName Action, FName ConflictingAction, FKey NewKey, FString& Error)
+bool USPControlSettings::SwapActionBinding(FName Action, FName ConflictingAction, FKey NewKey, FString& Error, bool bSaveSettings)
 {
     if (!CanRebindAction(Action) || !CanRebindAction(ConflictingAction) || Action == ConflictingAction)
     {
@@ -115,18 +115,27 @@ bool USPControlSettings::SwapActionBinding(FName Action, FName ConflictingAction
 
     const auto* Input = GetDefault<UInputSettings>();
     FKey PreviousActionKey;
+    int32 ActionKeyCount = 0;
+    int32 ConflictKeyCount = 0;
+    bool bHasModifiers = false;
     for (const auto& Mapping : Input->GetActionMappings())
     {
-        if (Mapping.ActionName == Action && !Mapping.Key.IsGamepadKey())
+        if (Mapping.Key.IsGamepadKey()) continue;
+        if (Mapping.ActionName != Action && Mapping.ActionName != ConflictingAction) continue;
+        bHasModifiers |= Mapping.bShift || Mapping.bCtrl || Mapping.bAlt || Mapping.bCmd;
+        if (Mapping.ActionName == Action)
         {
+            ++ActionKeyCount;
             PreviousActionKey = Mapping.Key;
-            break;
         }
+        else ++ConflictKeyCount;
     }
 
-    if (!PreviousActionKey.IsValid() || PreviousActionKey == NewKey)
+    // A two-key swap must not silently discard alternate keys or modifier chords.
+    if (ActionKeyCount != 1 || ConflictKeyCount != 1 || bHasModifiers
+        || !PreviousActionKey.IsValid() || PreviousActionKey == NewKey)
     {
-        Error = TEXT("The selected action does not have a swappable keyboard or mouse binding.");
+        Error = TEXT("Swap requires one unmodified keyboard or mouse binding per action. Choose a different key or assign a single binding first.");
         return false;
     }
 
@@ -142,7 +151,7 @@ bool USPControlSettings::SwapActionBinding(FName Action, FName ConflictingAction
         return false;
     }
 
-    SaveConfig();
+    if (bSaveSettings) SaveConfig();
     Error.Reset();
     return true;
 }

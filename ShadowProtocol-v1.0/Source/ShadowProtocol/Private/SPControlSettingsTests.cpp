@@ -12,7 +12,7 @@ bool FSPRebindingTest::RunTest(const FString& Parameters)
     const auto Before = Input->GetActionMappings();
     auto* Settings = NewObject<USPControlSettings>();
     FString Error;
-    // No SaveConfig calls: the test never changes stored player preferences.
+    // Disable persistence on swap calls: tests must never change stored player preferences.
     for (FKey Key : {EKeys::Escape, EKeys::Tab, EKeys::W, EKeys::LeftMouseButton})
     {
         Settings->ActionOverrides = {FInputActionKeyMapping(TEXT("Reload"), Key)};
@@ -37,14 +37,35 @@ bool FSPRebindingTest::RunTest(const FString& Parameters)
     FName Conflict;
     TestTrue(TEXT("Conflict lookup identifies Fire on left mouse"), Settings->FindActionUsingKey(EKeys::LeftMouseButton, TEXT("Reload"), Conflict));
     TestEqual(TEXT("Conflict lookup returns Fire"), Conflict, FName(TEXT("Fire")));
-    TestTrue(TEXT("Confirmed swap moves Reload to Fire's key atomically"), Settings->SwapActionBinding(TEXT("Reload"), TEXT("Fire"), EKeys::LeftMouseButton, Error));
+    TestTrue(TEXT("Confirmed swap moves Reload to Fire's key atomically"), Settings->SwapActionBinding(TEXT("Reload"), TEXT("Fire"), EKeys::LeftMouseButton, Error, false));
     const auto AfterConfirmedSwap = Input->GetActionMappings();
     TestTrue(TEXT("Reload receives left mouse after swap"), AfterConfirmedSwap.Contains(FInputActionKeyMapping(TEXT("Reload"), EKeys::LeftMouseButton)));
     TestTrue(TEXT("Fire receives Reload's previous F12 key after swap"), AfterConfirmedSwap.Contains(FInputActionKeyMapping(TEXT("Fire"), EKeys::F12)));
 
     const auto StableAfterSwap = Input->GetActionMappings();
-    TestFalse(TEXT("Stale conflict confirmation is rejected"), Settings->SwapActionBinding(TEXT("Aim"), TEXT("Fire"), EKeys::LeftMouseButton, Error));
+    TestFalse(TEXT("Stale conflict confirmation is rejected"), Settings->SwapActionBinding(TEXT("Aim"), TEXT("Fire"), EKeys::LeftMouseButton, Error, false));
     TestTrue(TEXT("Rejected stale swap preserves bindings"), StableAfterSwap == Input->GetActionMappings());
+
+    for (FName MultiAction : {FName(TEXT("Reload")), FName(TEXT("Fire"))})
+    {
+        const FInputActionKeyMapping Alternate(MultiAction, EKeys::F11);
+        Input->AddActionMapping(Alternate, false);
+        const auto WithAlternate = Input->GetActionMappings();
+        const auto PreviousOverrides = Settings->ActionOverrides;
+        TestFalse(TEXT("Swap cannot discard either action's alternate key"),
+            Settings->SwapActionBinding(TEXT("Reload"), TEXT("Fire"), EKeys::F12, Error, false));
+        TestTrue(TEXT("Ambiguous swap preserves runtime mappings"), WithAlternate == Input->GetActionMappings());
+        TestTrue(TEXT("Ambiguous swap preserves saved overrides"), PreviousOverrides == Settings->ActionOverrides);
+        Input->RemoveActionMapping(Alternate, false);
+    }
+    const FInputActionKeyMapping PlainReload(TEXT("Reload"), EKeys::LeftMouseButton);
+    const FInputActionKeyMapping ChordReload(TEXT("Reload"), EKeys::LeftMouseButton, false, true);
+    Input->RemoveActionMapping(PlainReload, false);
+    Input->AddActionMapping(ChordReload, false);
+    const auto WithChord = Input->GetActionMappings();
+    TestFalse(TEXT("Swap cannot discard a modifier chord"),
+        Settings->SwapActionBinding(TEXT("Reload"), TEXT("Fire"), EKeys::F12, Error, false));
+    TestTrue(TEXT("Rejected chord swap preserves runtime mappings"), WithChord == Input->GetActionMappings());
 
     const auto Current = Input->GetActionMappings();
     for (const auto& Mapping : Current) Input->RemoveActionMapping(Mapping, false);
