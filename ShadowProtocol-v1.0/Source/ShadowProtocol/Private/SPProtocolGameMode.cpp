@@ -1,17 +1,49 @@
 #include "SPProtocolGameMode.h"
+#include "SPCombatHUD.h"
+#include "SPOnlineGameSession.h"
 #include "SPProtocolGameState.h"
 #include "SPPlayerState.h"
 #include "SPCharacter.h"
 #include "SPObserverPlayerController.h"
 #include "SPObjectiveSite.h"
+#include "SPDedicatedServerBackendSubsystem.h"
+#include "SPBuildInfoLibrary.h"
 #include "GameFramework/PlayerStart.h"
+#include "GameFramework/GameSession.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "Engine/World.h"
+#include "Engine/GameInstance.h"
 #include "GameFramework/Pawn.h"
+#include "Misc/App.h"
+#include "HAL/PlatformTime.h"
+
+namespace
+{
+bool IsSafeAdmissionOption(const FString& Value)
+{
+    if (Value.IsEmpty()) return false;
+
+    for (int32 Index = 0; Index < Value.Len(); ++Index)
+    {
+        const TCHAR Character = Value[Index];
+        if (!FChar::IsAlnum(Character)
+            && Character != TEXT('-')
+            && Character != TEXT('_')
+            && Character != TEXT('.'))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+}
 
 ASPProtocolGameMode::ASPProtocolGameMode()
 {
+    HUDClass=ASPCombatHUD::StaticClass();
+    GameSessionClass=ASPOnlineGameSession::StaticClass();
+    DefaultPawnClass=ASPCharacter::StaticClass();
     GameStateClass=ASPProtocolGameState::StaticClass();
     PlayerStateClass=ASPPlayerState::StaticClass();
     PlayerControllerClass=ASPObserverPlayerController::StaticClass();
@@ -21,6 +53,16 @@ ASPProtocolGameMode::ASPProtocolGameMode()
 void ASPProtocolGameMode::BeginPlay()
 {
     Super::BeginPlay();
+
+    if (IsDedicatedAdmissionRequired())
+    {
+        if (USPDedicatedServerBackendSubsystem* Backend = GetDedicatedServerBackend())
+        {
+            Backend->OnAdmissionCompleted.AddDynamic(this, &ASPProtocolGameMode::HandleBackendAdmissionCompleted);
+            Backend->OnAdmissionFailed.AddDynamic(this, &ASPProtocolGameMode::HandleBackendAdmissionFailed);
+        }
+    }
+
     if(auto* GS=GetGameState<ASPProtocolGameState>())
     {
         GS->MatchPhase=ESPMatchPhase::Planning;
@@ -36,9 +78,133 @@ void ASPProtocolGameMode::BeginPlay()
     }
 }
 
+void ASPProtocolGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    if (USPDedicatedServerBackendSubsystem* Backend = GetDedicatedServerBackend())
+    {
+        Backend->OnAdmissionCompleted.RemoveDynamic(this, &ASPProtocolGameMode::HandleBackendAdmissionCompleted);
+        Backend->OnAdmissionFailed.RemoveDynamic(this, &ASPProtocolGameMode::HandleBackendAdmissionFailed);
+    }
+    PendingAdmissions.Reset();
+    AdmittedPlayerMatches.Reset();
+    Super::EndPlay(EndPlayReason);
+}
+
+bool ASPProtocolGameMode::IsDedicatedAdmissionRequired() const
+{
+    return bRequireDedicatedServerAdmission && IsRunningDedicatedServer();
+}
+
+USPDedicatedServerBackendSubsystem* ASPProtocolGameMode::GetDedicatedServerBackend() const
+{
+    UWorld* World = GetWorld();
+    UGameInstance* GameInstance = World ? World->GetGameInstance() : nullptr;
+    return GameInstance ? GameInstance->GetSubsystem<USPDedicatedServerBackendSubsystem>() : nullptr;
+}
+
+void ASPProtocolGameMode::PreLogin(
+    const FString& Options,
+    const FString& Address,
+    const FUniqueNetIdRepl& UniqueId,
+    FString& ErrorMessage)
+{
+    Super::PreLogin(Options, Address, UniqueId, ErrorMessage);
+    if (!ErrorMessage.IsEmpty() || !IsDedicatedAdmissionRequired())
+    {
+        return;
+    }
+
+    const auto* OnlineSession = Cast<ASPOnlineGameSession>(GameSession);
+    if (!OnlineSession || !OnlineSession->IsAcceptingAdmissions())
+    {
+        ErrorMessage = TEXT("Dedicated server online session is unavailable.");
+        return;
+    }
+
+    const FString AllocationId = UGameplayStatics::ParseOption(Options, TEXT("spAllocationId"));
+    const FString MatchId = UGameplayStatics::ParseOption(Options, TEXT("spMatchId"));
+    const FString ConnectToken = UGameplayStatics::ParseOption(Options, TEXT("spConnectToken"));
+    const FString TargetServerId = UGameplayStatics::ParseOption(Options, TEXT("spServerId"));
+    const FString NetworkBuild = UGameplayStatics::ParseOption(Options, TEXT("spNetworkBuild"));
+
+    const FString ReconnectGrantId = UGameplayStatics::ParseOption(Options, TEXT("spReconnectGrantId"));
+    FGuid ReconnectGuid;
+    if (!ReconnectGrantId.IsEmpty() && !FGuid::Parse(ReconnectGrantId, ReconnectGuid))
+    {
+        ErrorMessage = TEXT("Invalid reconnect grant.");
+        return;
+    }
+
+    FGuid AllocationGuid;
+    FGuid MatchGuid;
+    if (!FGuid::Parse(AllocationId, AllocationGuid)
+        || !FGuid::Parse(MatchId, MatchGuid)
+        || ConnectToken.Len() > 256
+        || ConnectToken.Len() < 24
+        || !IsSafeAdmissionOption(ConnectToken)
+        || !IsSafeAdmissionOption(TargetServerId)
+        || !IsSafeAdmissionOption(NetworkBuild))
+    {
+        ErrorMessage = TEXT("Invalid or incomplete Shadow Protocol admission envelope.");
+        return;
+    }
+
+    USPDedicatedServerBackendSubsystem* Backend = GetDedicatedServerBackend();
+    if (!Backend || !Backend->IsConfigured() || !Backend->IsRegistered() || Backend->IsDraining())
+    {
+        ErrorMessage = TEXT("Dedicated server admission service is unavailable.");
+        return;
+    }
+
+    if (!TargetServerId.Equals(Backend->GetServerId(), ESearchCase::CaseSensitive))
+    {
+        ErrorMessage = TEXT("Allocation targets a different dedicated server.");
+        return;
+    }
+
+    if (!NetworkBuild.Equals(USPBuildInfoLibrary::GetNetworkBuildId(), ESearchCase::CaseSensitive))
+    {
+        ErrorMessage = TEXT("Client/server network build mismatch.");
+    }
+}
+
+FString ASPProtocolGameMode::InitNewPlayer(
+    APlayerController* NewPlayerController,
+    const FUniqueNetIdRepl& UniqueId,
+    const FString& Options,
+    const FString& Portal)
+{
+    const FString InitError = Super::InitNewPlayer(NewPlayerController, UniqueId, Options, Portal);
+    if (!InitError.IsEmpty() || !IsDedicatedAdmissionRequired())
+    {
+        return InitError;
+    }
+
+    const FString AllocationId = UGameplayStatics::ParseOption(Options, TEXT("spAllocationId"));
+    const FString MatchId = UGameplayStatics::ParseOption(Options, TEXT("spMatchId"));
+    const FString ConnectToken = UGameplayStatics::ParseOption(Options, TEXT("spConnectToken"));
+
+    if (!NewPlayerController || PendingAdmissions.Contains(AllocationId))
+    {
+        return TEXT("Duplicate or invalid pending allocation.");
+    }
+
+    FSPPendingPlayerAdmission Pending;
+    Pending.Controller = NewPlayerController;
+    Pending.AllocationId = AllocationId;
+    Pending.MatchId = MatchId;
+    Pending.ConnectToken = ConnectToken;
+    Pending.RequestId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphens);
+    Pending.ReconnectGrantId = UGameplayStatics::ParseOption(Options, TEXT("spReconnectGrantId"));
+    Pending.DeadlineRealSeconds = FPlatformTime::Seconds() + FMath::Max(3.0f, PendingAdmissionTimeoutSeconds);
+    PendingAdmissions.Add(AllocationId, MoveTemp(Pending));
+    return FString();
+}
+
 void ASPProtocolGameMode::Tick(float DT)
 {
     Super::Tick(DT);
+    UpdatePendingAdmissions();
     auto* GS=GetGameState<ASPProtocolGameState>();
     UpdateReconnectReservations();
     if(!GS || GS->bMatchComplete) return;
@@ -79,6 +245,15 @@ void ASPProtocolGameMode::ResetRoundState()
 
 void ASPProtocolGameMode::BeginPreparation()
 {
+    const auto* CurrentState = GetGameState<ASPProtocolGameState>();
+    if (!CurrentState || CurrentState->bMatchComplete) return;
+    // A player can withdraw readiness while asynchronous OSS start is pending.
+    if (CurrentState->MatchPhase == ESPMatchPhase::Planning && !CanStartCompetitiveMatch()) return;
+    if (IsDedicatedAdmissionRequired())
+    {
+        auto* OnlineSession = Cast<ASPOnlineGameSession>(GameSession);
+        if (!OnlineSession || !OnlineSession->StartProtocolSession()) return;
+    }
     if(auto* GS=GetGameState<ASPProtocolGameState>())
     {
         ResetRoundState();
@@ -153,26 +328,306 @@ void ASPProtocolGameMode::EvaluateEliminationWin()
 void ASPProtocolGameMode::PostLogin(APlayerController* NewPlayer)
 {
     Super::PostLogin(NewPlayer);
-    auto* PS=NewPlayer ? NewPlayer->GetPlayerState<ASPPlayerState>() : nullptr;
-    if(!PS) return;
-    int32 D9=0, Helix=0;
-    for(APlayerState* BasePS : GameState->PlayerArray)
+
+    auto* PS = NewPlayer ? NewPlayer->GetPlayerState<ASPPlayerState>() : nullptr;
+    if (!PS) return;
+
+    if (IsDedicatedAdmissionRequired())
     {
-        if(const auto* Existing=Cast<ASPPlayerState>(BasePS))
+        FString AllocationId;
+        if (!FindPendingAdmissionForController(NewPlayer, AllocationId))
         {
-            if(Existing==PS) continue;
-            if(Existing->Team==ESPTeam::DirectorateNine) ++D9;
-            else if(Existing->Team==ESPTeam::Helix) ++Helix;
+            DisconnectPlayer(NewPlayer, TEXT("Dedicated-server admission state was not created."));
+            return;
+        }
+
+        FSPPendingPlayerAdmission* Pending = PendingAdmissions.Find(AllocationId);
+        USPDedicatedServerBackendSubsystem* Backend = GetDedicatedServerBackend();
+        if (!Pending || !Backend || !Backend->IsRegistered() || Backend->IsDraining())
+        {
+            RejectPendingAdmission(AllocationId, TEXT("Dedicated-server admission service became unavailable."));
+            return;
+        }
+
+        PS->Team = ESPTeam::None;
+        PS->ConnectionState = ESPConnectionState::Disconnected;
+        PS->bReady = false;
+        PS->bSessionAuthenticated = false;
+        PS->AuthenticatedSessionId.Reset();
+        PS->AuthenticatedUserId.Reset();
+
+        const auto* CurrentState = GetGameState<ASPProtocolGameState>();
+        if (!CurrentState || (!Pending->ReconnectGrantId.IsEmpty()
+            && (CurrentState->bMatchComplete || CurrentState->MatchPhase != ESPMatchPhase::Planning
+                || CurrentState->RoundState != ESPRoundState::Waiting)))
+        {
+            RejectPendingAdmission(AllocationId, TEXT("Reconnect is only available in the ready room."));
+            return;
+        }
+        Pending->bRequestStarted = true;
+        const FString ConnectToken = Pending->ConnectToken;
+        Pending->ConnectToken.Reset();
+        Backend->AdmitConnection(Pending->AllocationId, Pending->MatchId, ConnectToken,
+            Pending->RequestId, Pending->ReconnectGrantId, GetGameState<ASPProtocolGameState>()->RoundNumber);
+        return;
+    }
+
+    AssignCompetitiveTeam(PS);
+    PS->ConnectionState = ESPConnectionState::Connected;
+    PS->bReady = false;
+    RefreshCompetitiveSlots();
+}
+
+void ASPProtocolGameMode::HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer)
+{
+    if (IsDedicatedAdmissionRequired())
+    {
+        FString AllocationId;
+        if (FindPendingAdmissionForController(NewPlayer, AllocationId))
+        {
+            return;
+        }
+
+        const ASPPlayerState* PS = NewPlayer ? NewPlayer->GetPlayerState<ASPPlayerState>() : nullptr;
+        if (!PS || !PS->bSessionAuthenticated)
+        {
+            return;
         }
     }
-    PS->Team=(D9<=Helix && D9<5) ? ESPTeam::DirectorateNine : ESPTeam::Helix;
-    PS->ConnectionState=ESPConnectionState::Connected;
-    PS->bReady=false;
+
+    Super::HandleStartingNewPlayer_Implementation(NewPlayer);
+}
+
+void ASPProtocolGameMode::AssignCompetitiveTeam(ASPPlayerState* Player)
+{
+    if (!Player) return;
+
+    int32 D9 = 0;
+    int32 Helix = 0;
+    for (APlayerState* BasePS : GameState->PlayerArray)
+    {
+        const auto* Existing = Cast<ASPPlayerState>(BasePS);
+        if (!Existing || Existing == Player || (IsDedicatedAdmissionRequired() && !Existing->bSessionAuthenticated))
+        {
+            continue;
+        }
+
+        if (Existing->Team == ESPTeam::DirectorateNine) ++D9;
+        else if (Existing->Team == ESPTeam::Helix) ++Helix;
+    }
+
+    Player->Team = (D9 <= Helix && D9 < 5) ? ESPTeam::DirectorateNine : ESPTeam::Helix;
+}
+
+bool ASPProtocolGameMode::FindPendingAdmissionForController(APlayerController* PlayerController, FString& OutAllocationId) const
+{
+    if (!PlayerController) return false;
+
+    for (const TPair<FString, FSPPendingPlayerAdmission>& Pair : PendingAdmissions)
+    {
+        if (Pair.Value.Controller.Get() == PlayerController)
+        {
+            OutAllocationId = Pair.Key;
+            return true;
+        }
+    }
+    return false;
+}
+
+void ASPProtocolGameMode::HandleBackendAdmissionCompleted(FSPDedicatedServerAdmission Admission)
+{
+    FSPPendingPlayerAdmission* Pending = PendingAdmissions.Find(Admission.AllocationId);
+    if (!Pending || Pending->MatchId != Admission.MatchId || Pending->RequestId != Admission.RequestId)
+    {
+        return;
+    }
+
+    APlayerController* PlayerController = Pending->Controller.Get();
+    if (!PlayerController)
+    {
+        PendingAdmissions.Remove(Admission.AllocationId);
+        return;
+    }
+
+    PromoteAdmittedPlayer(PlayerController, Admission);
+}
+
+void ASPProtocolGameMode::PromoteAdmittedPlayer(APlayerController* PlayerController, const FSPDedicatedServerAdmission& Admission)
+{
+    FSPPendingPlayerAdmission* Pending = PendingAdmissions.Find(Admission.AllocationId);
+    if (!Pending || Pending->Controller.Get() != PlayerController || Pending->MatchId != Admission.MatchId
+        || Pending->RequestId != Admission.RequestId || Pending->ReconnectGrantId != Admission.ReconnectGrantId)
+    {
+        return;
+    }
+
+    const auto* OnlineSession = Cast<ASPOnlineGameSession>(GameSession);
+    const auto* Backend = GetDedicatedServerBackend();
+    if (!Pending->bRequestStarted || Pending->DeadlineRealSeconds <= FPlatformTime::Seconds()
+        || !OnlineSession || !OnlineSession->IsAcceptingAdmissions()
+        || !Backend || !Backend->IsRegistered() || Backend->IsDraining())
+    {
+        RejectPendingAdmission(Admission.AllocationId, TEXT("Admission expired or server became unavailable."));
+        return;
+    }
+
+    ASPPlayerState* PS = PlayerController->GetPlayerState<ASPPlayerState>();
+    if (!PS || Admission.UserId.IsEmpty())
+    {
+        RejectPendingAdmission(Admission.AllocationId, TEXT("Backend admission did not provide a valid authenticated player identity."));
+        return;
+    }
+
+    auto* GS = GetGameState<ASPProtocolGameState>();
+    for (APlayerState* BasePS : GameState->PlayerArray)
+    {
+        const auto* Existing = Cast<ASPPlayerState>(BasePS);
+        if (Existing && Existing != PS && Existing->bSessionAuthenticated
+            && Existing->AuthenticatedUserId == Admission.UserId)
+        {
+            RejectPendingAdmission(Admission.AllocationId, TEXT("Player is already connected."));
+            return;
+        }
+    }
+    const FSPCompetitivePlayerSlot* Reserved = nullptr;
+    if (!Admission.ReconnectGrantId.IsEmpty())
+    {
+        const FString* ReservedMatch = AdmittedPlayerMatches.Find(Admission.UserId);
+        // Until pawn/life-state recovery exists, reconnect is restricted to the ready room.
+        if (ReservedMatch && *ReservedMatch == Admission.MatchId
+            && GS && !GS->bMatchComplete && GS->RoundNumber == Admission.RoundNumber
+            && GS->MatchPhase == ESPMatchPhase::Planning && GS->RoundState == ESPRoundState::Waiting)
+            for (const FSPCompetitivePlayerSlot& Slot : GS->PlayerSlots)
+            {
+                const float* Deadline = ReconnectDeadlines.Find(Slot.PlayerId);
+                if (Slot.SessionId == Admission.UserId && Slot.SlotIndex == Admission.SlotIndex
+                    && Slot.ConnectionState == ESPConnectionState::Reconnecting
+                    && Deadline && *Deadline > GetWorld()->GetTimeSeconds()) { Reserved = &Slot; break; }
+            }
+        if (!Reserved)
+        {
+            RejectPendingAdmission(Admission.AllocationId, TEXT("Local reconnect reservation is no longer valid."));
+            return;
+        }
+        PS->Team = Reserved->Team;
+        PS->SelectedSpawnGroup = Reserved->SpawnGroup;
+        ReconnectDeadlines.Remove(Reserved->PlayerId);
+    }
+    if (!Reserved)
+    {
+        if (Admission.SlotIndex < 0 || Admission.SlotIndex >= ExpectedCompetitivePlayers)
+        {
+            RejectPendingAdmission(Admission.AllocationId, TEXT("Backend admission returned an invalid competitive slot."));
+            return;
+        }
+
+        if (Admission.Team.Equals(TEXT("DirectorateNine"), ESearchCase::CaseSensitive))
+        {
+            PS->Team = ESPTeam::DirectorateNine;
+        }
+        else if (Admission.Team.Equals(TEXT("Helix"), ESearchCase::CaseSensitive))
+        {
+            PS->Team = ESPTeam::Helix;
+        }
+        else
+        {
+            RejectPendingAdmission(Admission.AllocationId, TEXT("Backend admission returned an invalid competitive team."));
+            return;
+        }
+    }
+
+    PendingAdmissions.Remove(Admission.AllocationId);
+
+    AdmittedPlayerMatches.Add(Admission.UserId, Admission.MatchId);
+    PS->AuthenticatedUserId = Admission.UserId;
+    PS->AuthenticatedSessionId = Admission.UserId;
+    PS->CompetitiveSlotIndex = Admission.SlotIndex;
+    PS->bSessionAuthenticated = true;
+    PS->ConnectionState = ESPConnectionState::Connected;
+    PS->bReady = false;
     RefreshCompetitiveSlots();
+
+    Super::HandleStartingNewPlayer_Implementation(PlayerController);
+}
+
+void ASPProtocolGameMode::HandleBackendAdmissionFailed(FString AllocationId, FString MatchId, FString RequestId, FString ErrorMessage)
+{
+    const FSPPendingPlayerAdmission* Pending = PendingAdmissions.Find(AllocationId);
+    if (!Pending || Pending->MatchId != MatchId || Pending->RequestId != RequestId)
+    {
+        return;
+    }
+
+    RejectPendingAdmission(AllocationId, ErrorMessage.IsEmpty() ? TEXT("Backend admission denied.") : ErrorMessage);
+}
+
+void ASPProtocolGameMode::RejectPendingAdmission(const FString& AllocationId, const FString& Reason)
+{
+    FSPPendingPlayerAdmission* Pending = PendingAdmissions.Find(AllocationId);
+    if (!Pending) return;
+
+    TWeakObjectPtr<APlayerController> Controller = Pending->Controller;
+    PendingAdmissions.Remove(AllocationId);
+
+    if (Controller.IsValid())
+    {
+        DisconnectPlayer(Controller.Get(), Reason);
+    }
+}
+
+void ASPProtocolGameMode::DisconnectPlayer(APlayerController* PlayerController, const FString& Reason)
+{
+    if (!PlayerController) return;
+
+    if (ASPPlayerState* PS = PlayerController->GetPlayerState<ASPPlayerState>())
+    {
+        PS->bSessionAuthenticated = false;
+        PS->ConnectionState = ESPConnectionState::Disconnected;
+        PS->bReady = false;
+    }
+
+    const FText ReasonText = FText::FromString(Reason.IsEmpty() ? TEXT("Dedicated-server admission denied.") : Reason);
+    if (GameSession && GameSession->KickPlayer(PlayerController, ReasonText)) return;
+    PlayerController->ClientReturnToMainMenuWithTextReason(ReasonText);
+    PlayerController->Destroy();
+}
+
+void ASPProtocolGameMode::UpdatePendingAdmissions()
+{
+    if (!GetWorld() || PendingAdmissions.IsEmpty())
+    {
+        return;
+    }
+
+    const double Now = FPlatformTime::Seconds();
+    TArray<FString> ExpiredAllocations;
+    for (const TPair<FString, FSPPendingPlayerAdmission>& Pair : PendingAdmissions)
+    {
+        if (!Pair.Value.Controller.IsValid() || Pair.Value.DeadlineRealSeconds <= Now)
+        {
+            ExpiredAllocations.Add(Pair.Key);
+        }
+    }
+
+    for (const FString& AllocationId : ExpiredAllocations)
+    {
+        RejectPendingAdmission(AllocationId, TEXT("Dedicated-server admission timed out."));
+    }
 }
 
 void ASPProtocolGameMode::Logout(AController* Exiting)
 {
+    if (APlayerController* PlayerController = Cast<APlayerController>(Exiting))
+    {
+        FString PendingAllocationId;
+        if (FindPendingAdmissionForController(PlayerController, PendingAllocationId))
+        {
+            PendingAdmissions.Remove(PendingAllocationId);
+            Super::Logout(Exiting);
+            return;
+        }
+    }
+
     auto* GS=GetGameState<ASPProtocolGameState>();
     if(Exiting)
     {
@@ -203,21 +658,58 @@ void ASPProtocolGameMode::Logout(AController* Exiting)
     Super::Logout(Exiting);
 }
 
-void ASPProtocolGameMode::SetPlayerReady(ASPPlayerState* Player,bool bReady)
+bool ASPProtocolGameMode::CanEditReadyRoom(const ASPPlayerState* Player) const
 {
-    if(!Player || !Player->HasAuthority()) return;
+    const auto* GS = GetGameState<ASPProtocolGameState>();
+    if (!HasAuthority() || !Player || !Player->HasAuthority() || Player->GetWorld() != GetWorld()
+        || !GS || !GS->PlayerArray.Contains(Player) || GS->bMatchComplete
+        || GS->MatchPhase != ESPMatchPhase::Planning || GS->RoundState != ESPRoundState::Waiting
+        || Player->ConnectionState != ESPConnectionState::Connected || Player->Team == ESPTeam::None)
+        return false;
+    if ((bRequireAuthenticatedSessions || IsDedicatedAdmissionRequired()) && !Player->bSessionAuthenticated)
+        return false;
+    if (IsDedicatedAdmissionRequired())
+    {
+        const auto* Backend = GetDedicatedServerBackend();
+        const auto* OnlineSession = Cast<ASPOnlineGameSession>(GameSession);
+        if (!Backend || !Backend->IsRegistered() || Backend->IsDraining()
+            || !OnlineSession || !OnlineSession->IsAcceptingAdmissions()) return false;
+    }
+    return true;
+}
+
+TArray<FName> ASPProtocolGameMode::GetReadyRoomSpawnGroups(const ASPPlayerState* Player) const
+{
+    TArray<FName> Choices;
+    if (!CanEditReadyRoom(Player)) return Choices;
+    for (const auto& Group : SpawnGroups)
+        if (!Group.GroupId.IsNone() && (Group.Team == ESPTeam::None || Group.Team == Player->Team))
+            Choices.AddUnique(Group.GroupId);
+    return Choices;
+}
+
+bool ASPProtocolGameMode::SetPlayerReady(ASPPlayerState* Player,bool bReady)
+{
+    if (!CanEditReadyRoom(Player)) return false;
     Player->bReady=bReady;
+    Player->ForceNetUpdate();
     RefreshCompetitiveSlots();
+    return true;
 }
 
 bool ASPProtocolGameMode::SelectSpawnGroup(ASPPlayerState* Player,FName SpawnGroupId)
 {
-    if(!Player || !Player->HasAuthority()) return false;
+    if (!CanEditReadyRoom(Player) || SpawnGroupId.IsNone()) return false;
     for(const FSPSpawnGroup& Group : SpawnGroups)
     {
         if(Group.GroupId==SpawnGroupId && (Group.Team==ESPTeam::None || Group.Team==Player->Team))
         {
-            Player->SelectedSpawnGroup=SpawnGroupId;
+            if (Player->SelectedSpawnGroup != SpawnGroupId)
+            {
+                Player->SelectedSpawnGroup=SpawnGroupId;
+                Player->bReady=false; // Changed deployment choices require confirmation.
+                Player->ForceNetUpdate();
+            }
             RefreshCompetitiveSlots();
             return true;
         }
@@ -245,6 +737,10 @@ bool ASPProtocolGameMode::CanStartCompetitiveMatch() const
 void ASPProtocolGameMode::RefreshCompetitiveSlots()
 {
     auto* GS=GetGameState<ASPProtocolGameState>(); if(!GS) return;
+    TArray<FSPCompetitivePlayerSlot> Previous = GS->PlayerSlots;
+    Previous.RemoveAll([](const FSPCompetitivePlayerSlot& Slot) { return Slot.ConnectionState == ESPConnectionState::Disconnected; });
+    TSet<int32> Occupied;
+    for (const auto& Slot : Previous) Occupied.Add(Slot.SlotIndex);
     TArray<FSPCompetitivePlayerSlot> Reserved;
     for(const FSPCompetitivePlayerSlot& Existing:GS->PlayerSlots)
         if(Existing.ConnectionState==ESPConnectionState::Reconnecting) Reserved.Add(Existing);
@@ -253,13 +749,33 @@ void ASPProtocolGameMode::RefreshCompetitiveSlots()
     for(APlayerState* BasePS : GameState->PlayerArray)
     {
         auto* PS=Cast<ASPPlayerState>(BasePS); if(!PS || Index>=ExpectedCompetitivePlayers) continue;
+        if (bRequireAuthenticatedSessions && !PS->bSessionAuthenticated) continue;
         FSPCompetitivePlayerSlot Slot;
-        Slot.SlotIndex=Index++;
+        const FString Identity = !PS->AuthenticatedUserId.IsEmpty() ? PS->AuthenticatedUserId : PS->AuthenticatedSessionId;
+        const auto* ExistingSlot = Previous.FindByPredicate([&](const FSPCompetitivePlayerSlot& Old)
+            { return !Identity.IsEmpty() ? Old.SessionId == Identity : Old.PlayerId == PS->GetPlayerId(); });
+        if (ExistingSlot) Slot.SlotIndex = ExistingSlot->SlotIndex;
+        else if (PS->CompetitiveSlotIndex >= 0 && PS->CompetitiveSlotIndex < ExpectedCompetitivePlayers
+            && !Occupied.Contains(PS->CompetitiveSlotIndex))
+        {
+            Slot.SlotIndex = PS->CompetitiveSlotIndex;
+            Occupied.Add(Slot.SlotIndex);
+        }
+        else
+        {
+            int32 FreeIndex = 0;
+            while (Occupied.Contains(FreeIndex)) ++FreeIndex;
+            if (FreeIndex >= ExpectedCompetitivePlayers) continue;
+            Slot.SlotIndex = FreeIndex;
+            Occupied.Add(FreeIndex);
+        }
+        PS->CompetitiveSlotIndex = Slot.SlotIndex;
+        ++Index;
         Slot.PlayerId=PS->GetPlayerId();
         Slot.Team=PS->Team;
         Slot.SpawnGroup=PS->SelectedSpawnGroup;
         Slot.Callsign=PS->GetPlayerName();
-        Slot.SessionId=PS->AuthenticatedSessionId;
+        Slot.SessionId=!PS->AuthenticatedUserId.IsEmpty() ? PS->AuthenticatedUserId : PS->AuthenticatedSessionId;
         Slot.bReady=PS->bReady;
         Slot.ConnectionState=PS->ConnectionState;
         if(Slot.bReady && Slot.ConnectionState==ESPConnectionState::Connected) ++Ready;
@@ -271,10 +787,11 @@ void ASPProtocolGameMode::RefreshCompetitiveSlots()
         bool bReclaimed=false;
         for(const FSPCompetitivePlayerSlot& Live:GS->PlayerSlots) if(!Slot.SessionId.IsEmpty() && Live.SessionId==Slot.SessionId){bReclaimed=true;break;}
         if(bReclaimed) continue;
-        Slot.SlotIndex=Index++;Slot.bReady=false;GS->PlayerSlots.Add(Slot);
+        ++Index;Slot.bReady=false;GS->PlayerSlots.Add(Slot);
     }
     GS->ReadyPlayerCount=Ready;
     GS->bAllPlayersReady=Ready>=ExpectedCompetitivePlayers && GS->PlayerSlots.Num()>=ExpectedCompetitivePlayers;
+    GS->ForceNetUpdate();
 }
 
 AActor* ASPProtocolGameMode::ChoosePlayerStart_Implementation(AController* Player)
@@ -324,6 +841,7 @@ void ASPProtocolGameMode::FinishRound(ESPTeam Winner,const FString& Reason)
     const bool bMatchWon=GS->DirectorateRoundWins>=RoundsToWin || GS->HelixRoundWins>=RoundsToWin || GS->RoundNumber>=MaxRounds;
     if(bMatchWon)
     {
+        if (auto* OnlineSession = Cast<ASPOnlineGameSession>(GameSession)) OnlineSession->EndProtocolSession();
         GS->bMatchComplete=true;
         GS->MatchPhase=ESPMatchPhase::MatchComplete;
         GS->RoundState=ESPRoundState::Complete;
@@ -341,7 +859,8 @@ void ASPProtocolGameMode::FinishRound(ESPTeam Winner,const FString& Reason)
 
 bool ASPProtocolGameMode::AuthorizePlayerSession(ASPPlayerState* Player,const FString& SessionId)
 {
-    if(!Player || SessionId.Len()<8) return false;
+    // Dedicated identities can only be promoted by one-time backend redemption.
+    if(IsDedicatedAdmissionRequired() || !Player || SessionId.Len()<8) return false;
     auto* GS=GetGameState<ASPProtocolGameState>();
     if(GS)
     {

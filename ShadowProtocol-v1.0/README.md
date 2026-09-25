@@ -1,14 +1,14 @@
-# SHADOW PROTOCOL — Embassy Vertical Slice v1.0
+# SHADOW PROTOCOL — Embassy Vertical Slice v1.0.1
 ### Every Move Is Classified.
 
 **Shadow Protocol** is a tactical first-person shooter development foundation built around intelligence warfare, planning, infiltration, breaching, objective recovery, extraction, and server-authoritative competitive play.
 
-This directory is the **v1.0 Embassy / Protocol vertical slice**. The previous `ShadowProtocol-v0.9/` directory remains preserved as the prior validated snapshot.
+The `ShadowProtocol-v1.0/` directory carries the **v1.0.1 stability patch** on top of the v1.0 Embassy / Protocol vertical slice. The previous `ShadowProtocol-v0.9/` directory remains preserved as the earlier validated snapshot.
 
-## What v1.0 contains
+## What v1.0.1 contains
 
 ### Playable browser vertical slice
-`PrototypeWeb/` contains the immediate mechanics and UX simulator. It preserves the v0.9 combat/match systems and adds the v1.0 production-interface layer.
+`PrototypeWeb/` contains the immediate mechanics and UX simulator. It preserves the v1.0 combat/match systems and adds the v1.0.1 stability and diagnostic layer.
 
 Core flow:
 
@@ -29,7 +29,10 @@ Current systems include:
 - Helix alert escalation, search behavior and QRF response;
 - objective overtime, kill feed, reconnect presentation and team-restricted spectating;
 - Operation Review and tactical scoring;
-- v1.0 settings/keybind interface, HUD-density modes, contrast/motion preferences, objective-site confirmation and deployment briefing.
+- classified-command settings/keybind interface, HUD-density modes, contrast/motion preferences, objective-site confirmation and deployment briefing;
+- v1.0.1 Input Hints and Intel Notices preferences;
+- v1.0.1 client build-integrity diagnostics and secure-session/reconnect presentation;
+- deterministic deployment timer cleanup and safer settings persistence.
 
 Open `PrototypeWeb/index.html` in a modern desktop browser to run the simulator.
 
@@ -61,13 +64,16 @@ Open `PrototypeWeb/index.html` in a modern desktop browser to run the simulator.
 
 The browser build is a **mechanics, UX and match-flow simulator**. It is not a claim that ten live network clients are already connected.
 
-## v1.0 professional interface
+## v1.0.1 production interface patch
 
 The additive production-UX layer is implemented in:
 - `PrototypeWeb/v1.js`
 - `PrototypeWeb/v1.css`
+- `PrototypeWeb/v101.css`
 
-It adds a classified-command settings surface, persistent local presentation preferences, objective-site confirmation, contextual cover/peek status, and a staged deployment sequence while leaving the existing v0.9 gameplay core intact.
+v1.0.1 keeps the existing v1.0 gameplay core intact while hardening local preference storage, deployment sequencing, settings close behavior, objective notice timing, client/session diagnostics and page-lifecycle cleanup.
+
+Browser build identity is `SP-1.0.1`.
 
 ## Unreal Engine 5 foundation
 
@@ -75,11 +81,20 @@ Open `ShadowProtocol.uproject` in Unreal Engine 5.6, or update `EngineAssociatio
 
 Core source lives in `Source/ShadowProtocol/`.
 
-v1.0 adds:
+v1.0 introduced:
 - `USPCoverSystemComponent` — replicated server-owned cover normal and peek state;
 - `ASPObjectiveSiteActor` — replicated authorable objective-site identity and active state;
 - `ASPDeploymentDirector` — replicated Authentication → Loadout Check → Insertion → Live sequence;
 - `ASPCharacter` integration for server-side cover probing when lean/peek state changes.
+
+v1.0.1 adds:
+- `USPBuildInfoLibrary` — shared release version, network build id, content revision and exact-match compatibility helpers for Blueprint/C++ session integration;
+- `USPBackendSessionSubsystem` — GameInstance-scoped HTTP/JSON bridge for compatibility checks, signed-session rotation, authenticated Embassy/Protocol allocation, update-required handling and reserved-slot reconnect;
+- Blueprint delegates for compatibility, session refresh, allocation, reconnect-ticket, reconnect-complete, upgrade-required and request-failure UI states;
+- Blueprint-visible allocation `ConnectHost`, `ConnectPort` and connect-token data with client-side validation before allocation success;
+- in-memory session/reconnect token handling with no privileged bootstrap or match-server secret embedded in the shipped client.
+
+`ShadowProtocol.Build.cs` includes `HTTP`, `Json` and `JsonUtilities` for the backend bridge.
 
 Existing foundations include server-authoritative Protocol round state, player slots, authenticated sessions, weapons, health/injuries, lag-compensation hooks, tactical equipment, intelligence nodes, alert state, fortification, doors/security devices, observer rules and competitive scoring.
 
@@ -87,24 +102,112 @@ Existing foundations include server-authoritative Protocol round state, player s
 
 `Backend/` uses TypeScript/Fastify with PostgreSQL, Redis and WebSocket foundations.
 
+For a fresh local backend:
+
 ```bash
 cd Backend
 cp .env.example .env
 npm install
+npm run db:init
 npm run dev
 ```
 
-For local PostgreSQL + Redis:
+For local PostgreSQL + Redis, start the services before `db:init`:
 
 ```bash
 docker compose up -d
 ```
 
-Apply `db/schema.sql` to PostgreSQL before starting persistent services. Replace all development secrets before any production deployment.
+`npm run db:init` applies the base schema plus the v1.0.1 connection/admission and server-registry migrations in order. To upgrade an existing v1.0 database without reapplying the full base schema:
+
+```bash
+npm run db:upgrade:v101
+```
+
+Replace every development secret before any production deployment.
+
+The backend protocol is **`0.8.0`** and server-owned compatibility enforcement is active. The default accepted network build is **`SP-1.0.1`**. Authenticated session creation rejects unsupported builds with HTTP `426`, signed sessions carry build/protocol identity, and match allocation validates both values again before reserving a server. `ACCEPTED_NETWORK_BUILDS` may be used for an explicit controlled rollout policy.
+
+### Regional dedicated-server registry and allocation
+
+PostgreSQL-backed production allocation now uses a health-aware regional server registry instead of a static address. Trusted dedicated servers register themselves through:
+
+```text
+POST /v1/servers/register
+POST /v1/servers/heartbeat
+POST /v1/servers/drain
+POST /v1/servers/release-allocation
+
+Registration bootstrap:
+x-match-server-secret: <SERVER_REGISTRATION_SECRET>
+
+After registration:
+x-sp-server-id: <registered server id>
+x-sp-node-credential: <per-node credential>
+```
+
+A registered node declares its stable `serverId`, region, network build, public host/port and allocation capacity. The allocator selects only nodes that:
+
+- are in the authenticated session region;
+- advertise the same network build;
+- are in `ready` state rather than `draining`/`offline`;
+- have a heartbeat newer than `SERVER_HEARTBEAT_TTL_MS` (30 seconds by default);
+- still have allocation capacity.
+
+Capacity reservation is updated atomically in PostgreSQL. Expired pre-admission reservations are reclaimed, and the trusted release endpoint decrements node load when an allocation closes or fails. Production returns `503 no-healthy-game-server` when no eligible node exists instead of silently routing to a stale or incompatible server.
+
+For local development only, the legacy static target remains as a fallback:
+
+```bash
+GAME_SERVER_PUBLIC_HOST=127.0.0.1
+GAME_SERVER_PUBLIC_PORT=7777
+```
+
+When PostgreSQL is not configured, allocation continues to use that static development target. With PostgreSQL in production, healthy registered nodes are required.
+
+Each persistent allocation stores its owning user, selected node/server id, target host/port, expiry and a **hash** of the short-lived connect token. The plaintext connect token is returned only to the client connection layer.
+
+### Dedicated-server connection admission
+
+Allocation now hands the client a concrete host/port plus a one-time connect token. `USPBackendSessionSubsystem::ConnectToAllocation` builds the Unreal travel URL and includes allocation id, match id, token, target server id and network build as short-lived admission options.
+
+`ASPProtocolGameMode` enforces a real pending admission gate on dedicated servers:
+
+- malformed/wrong-target joins are rejected in `PreLogin`;
+- controllers are held pending after `InitNewPlayer`;
+- `HandleStartingNewPlayer` blocks pawn creation;
+- `PostLogin` redeems the one-time token through the node-authenticated backend;
+- successful responses are correlated to allocation/match/server/build before team/slot assignment;
+- admission failures/timeouts are kicked before competitive participation.
+
+Production enrollment is additionally orchestrator-attested, while ongoing server authority uses expiring per-node credentials.
+
+### Backend validation
+
+Fast checks:
+
+```bash
+cd Backend
+npm install
+npm run typecheck
+npm run test:compatibility
+```
+
+PostgreSQL-backed validation:
+
+```bash
+npm run db:init
+npm run test:postgres
+```
+
+GitHub Actions runs all of the above against a disposable PostgreSQL 16 service. The suite validates build compatibility, session issuance/rotation, development/static routing behavior, authenticated matchmaking, server-only telemetry, regional node registration, draining/stale-node exclusion, capacity enforcement, allocation persistence, hashed connect tokens, one-time dedicated-server admission/replay rejection, database-owned ready-state, reserved-slot reconnect recovery and trusted allocation release.
 
 ## Documentation
 
 Start with:
+- `Docs/VERTICAL_SLICE_V101.md`
+- `Docs/CHANGELOG_V101.md`
+- `Docs/UE_SESSION_BRIDGE_V101.md`
 - `Docs/VERTICAL_SLICE_V10.md`
 - `Docs/CHANGELOG_V10.md`
 - `Docs/REQUIREMENTS_TRACEABILITY.md`
@@ -114,16 +217,70 @@ Start with:
 
 ## Production validation boundary
 
-The browser layer can be syntax/structure tested independently, but the Unreal additions still require a full Unreal Engine environment for Unreal Header Tool validation, C++ compilation, PIE, packaged-client testing and dedicated-server multiplayer testing.
+Browser syntax and backend TypeScript/security/allocation/database behavior are validated in GitHub Actions. The Unreal v1.0.1 additions still require a full Unreal Engine environment for Unreal Header Tool validation, C++ compilation, PIE, packaged-client testing and dedicated-server multiplayer testing.
 
 Production content still to author includes final Embassy geometry, skeletal meshes and first-person arms, animation blueprints, UMG production widgets, Niagara effects, MetaSounds/spatial audio, physical material/destruction profiles, nav meshes, online subsystem integration, anti-cheat integration and 10-client network soak testing.
 
-## Development path after v1.0
+## Development path after v1.0.1
 
-The next production milestones are:
-1. compile and integrate the v1.0 Unreal classes;
-2. author the production Embassy map and objective sites;
-3. convert the browser interface language into UMG widgets;
-4. add final first-person character/weapon animation and spatial audio;
-5. perform real dedicated-server 5v5 replication and latency testing;
-6. expand from the vertical slice toward Alpha content.
+The backend scheduler, per-node identity, credential rotation, orchestrator attestation, client travel handoff and pre-spawn admission gate are now implemented at source/integration-test level.
+
+Remaining production milestones:
+
+1. compile the Unreal networking layer with UE5.6/UHT;
+2. validate packaged client → dedicated-server travel and pending login behavior;
+3. bind ready-room, session-expiry and reconnect UMG;
+4. implement trusted platform/account bootstrap;
+5. author final Embassy production geometry/assets/audio;
+6. run real 10-client/5v5 replication, admission, reconnect, rotation, scheduler-failover and latency soak testing;
+7. resolve any UE-specific runtime/OnlineSubsystem issues found by that pass.
+
+### Per-node dedicated-server identity
+
+The shared server secret is now registration-bootstrap material only. Set `SERVER_REGISTRATION_SECRET` on trusted server/orchestrator infrastructure; `MATCH_SERVER_SECRET` remains a deprecated migration fallback for v1.0.1.
+
+Successful registration rotates a random per-node credential and persists only its SHA-256 hash. Heartbeat, drain, admission, release and authoritative match writes use `x-sp-server-id` plus `x-sp-node-credential`. Match-scoped operations are verified against `server_allocations.node_id`, so a credential for one node cannot operate on another node's allocation. The v1.0.1 migration chain now also applies `Backend/db/v101_node_credentials.sql`.
+
+
+### Expiring node credentials
+
+Per-node credentials are time-bounded rather than permanent. The default policy is a 6-hour credential TTL with a 2-minute previous-credential overlap window. Dedicated servers rotate through `POST /v1/servers/rotate-credential` before expiry. The allocator refuses expired nodes immediately, while the short overlap allows in-flight requests signed with the previous credential to finish without extending that credential's authority indefinitely.
+
+The Unreal dedicated-server bridge schedules rotation at about 75% of the issued lifetime and keeps both bootstrap and node credentials out of Blueprint/event payloads. `v101_node_credential_rotation.sql` is included in both fresh initialization and the v1.0.1 upgrade chain.
+
+
+### Orchestrator-backed server attestation
+
+Production PostgreSQL node enrollment now requires a short-lived control-plane attestation in addition to the registration bootstrap secret. The signed assertion binds server id, region, build, host, port and capacity and has a single-use UUID persisted in `server_node_attestations`; replay returns `409 server-attestation-replayed`.
+
+The orchestration signing secret remains outside the dedicated-server process. The process receives only `SP_NODE_ATTESTATION`, which the Unreal server bridge sends once during registration and clears from its own memory after successful consumption. See `Docs/NODE_ATTESTATION_V101.md`.
+
+
+### Controls conflict-safe key swapping
+
+The native controls panel now supports confirmed atomic swaps for supported combat/tactics actions. Selecting a key already owned by another supported action shows the conflict and requires **Confirm key swap**. Confirmation exchanges both actions as one validated candidate; failure leaves the current bindings unchanged. Pending swap state is discarded on action changes, controls close and restore-default operations. Movement/look axes and reserved/menu/system keys remain protected.
+
+
+### Shared 5v5 PROTOCOL match assembly
+
+Production PostgreSQL allocation now assembles solo players into a shared ten-player Embassy / PROTOCOL match instead of creating one match per player. Allocation serializes assembly within a region/build/mode/map/ranked bucket, reserves capacity on one healthy dedicated-server node and fills the earliest compatible assembling match.
+
+Key rules:
+
+- one authenticated user may hold only one active allocation; duplicate allocation requests return `409 active-allocation-exists`;
+- the target roster is 10 players;
+- allocations 0–4 are backend-assigned to `DirectorateNine` / attack;
+- allocations 5–9 are backend-assigned to `Helix` / defense;
+- each allocation receives an authoritative slot index from 0–9;
+- the tenth valid reservation moves the match from `assembling` to `ready`;
+- `/v1/matches/admit` atomically consumes the one-time connection token and promotes that user's backend roster slot to `connected`;
+- Unreal uses the admitted backend slot/team rather than connection order to construct the competitive roster;
+- expired, unconsumed pre-admission reservations return node capacity, delete their vacant pre-match roster slot and reopen a full lobby so a replacement can reclaim the exact slot;
+- a full node does not overbook an eleventh player.
+
+The migration `Backend/db/v101_match_assembly.sql` adds match assembly state, target-player count, assembly timestamps and supporting indexes. PostgreSQL CI now builds a complete ten-user shared match, checks the 5/5 team split, verifies authoritative slots 0–9, expires a reservation, refills the exact vacant slot and confirms capacity remains bounded.
+
+
+### Dedicated-server match isolation
+
+A registered Unreal dedicated-server process is now reserved to **one active match at a time**. Starting a new match requires an otherwise healthy node with `active_allocations=0`. Once a match has claimed that node, only additional allocations joining that same assembling match may consume its remaining player capacity. This prevents separate ranked/unranked matches from being routed to one UE process simultaneously.

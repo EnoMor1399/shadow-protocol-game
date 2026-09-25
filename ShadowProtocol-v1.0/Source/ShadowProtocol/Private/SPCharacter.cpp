@@ -1,3 +1,7 @@
+#include "Camera/CameraComponent.h"
+#include "SPObserverPlayerController.h"
+#include "SPControlSettings.h"
+#include "Components/InputComponent.h"
 #include "SPCharacter.h"
 #include "SPHealthComponent.h"
 #include "SPWeaponBase.h"
@@ -16,6 +20,12 @@ ASPCharacter::ASPCharacter()
 {
     bReplicates = true;
     PrimaryActorTick.bCanEverTick = true;
+    bUseControllerRotationYaw = true;
+    FirstPersonCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FirstPersonCamera"));
+    FirstPersonCamera->SetupAttachment(GetRootComponent());
+    FirstPersonCamera->SetRelativeLocation(FVector(0.f, 0.f, BaseEyeHeight));
+    FirstPersonCamera->bUsePawnControlRotation = true;
+    GetCharacterMovement()->GetNavAgentPropertiesRef().bCanCrouch = true;
     Health = CreateDefaultSubobject<USPHealthComponent>(TEXT("Health"));
     TacticalEquipment = CreateDefaultSubobject<USPTacticalEquipmentComponent>(TEXT("TacticalEquipment"));
     LagCompensation = CreateDefaultSubobject<USPLagCompensationComponent>(TEXT("LagCompensation"));
@@ -37,7 +47,7 @@ void ASPCharacter::SetupPlayerInputComponent(UInputComponent* IC)
     IC->BindAction("Crouch", IE_Pressed, this, &ASPCharacter::BeginSilent);
     IC->BindAction("Crouch", IE_Released, this, &ASPCharacter::EndSilent);
     IC->BindAction("Aim", IE_Pressed, this, &ASPCharacter::BeginAim);
-    IC->BindAction("Aim", IE_Released, this, &ASPCharacter::EndAim);
+    IC->BindAction("Aim", IE_Released, this, &ASPCharacter::ReleaseAimKey);
     IC->BindAction("Sprint", IE_Pressed, this, &ASPCharacter::BeginSprint);
     IC->BindAction("Sprint", IE_Released, this, &ASPCharacter::EndSprint);
     IC->BindAction("CycleEquipment", IE_Pressed, this, &ASPCharacter::CycleEquipment);
@@ -53,32 +63,33 @@ void ASPCharacter::SetupPlayerInputComponent(UInputComponent* IC)
     IC->BindAction("InspectWeapon", IE_Pressed, this, &ASPCharacter::InspectWeapon);
 }
 
-void ASPCharacter::MoveForward(float V){ if(V!=0.f) AddMovementInput(GetActorForwardVector(),V * (Health?Health->LegSpeedMultiplier:1.f)); }
-void ASPCharacter::MoveRight(float V){ if(V!=0.f) AddMovementInput(GetActorRightVector(),V * (Health?Health->LegSpeedMultiplier:1.f)); }
-void ASPCharacter::Turn(float V){ AddControllerYawInput(V); }
-void ASPCharacter::LookUp(float V){ AddControllerPitchInput(V); }
-void ASPCharacter::Fire(){ const AGameStateBase* GS=GetWorld()?GetWorld()->GetGameState():nullptr; const float ShotTime=GS?GS->GetServerWorldTimeSeconds():(GetWorld()?GetWorld()->GetTimeSeconds():0.f); ServerFire(ShotTime); }
-void ASPCharacter::Reload(){ ServerReload(); }
-void ASPCharacter::BeginSilent(){ Crouch(); ServerSetSilentMovement(true); }
-void ASPCharacter::EndSilent(){ UnCrouch(); ServerSetSilentMovement(false); }
-void ASPCharacter::ServerSetSilentMovement_Implementation(bool bEnabled){ bSilentMovement=bEnabled; }
-void ASPCharacter::ServerFire_Implementation(float ClientServerTimeSeconds){ if(EquippedWeapon) EquippedWeapon->ServerTryFire(this,ClientServerTimeSeconds); }
-void ASPCharacter::ServerReload_Implementation(){ if(EquippedWeapon) EquippedWeapon->ServerReload(); }
-void ASPCharacter::BeginAim(){ bAiming=true; bSprinting=false; GetCharacterMovement()->MaxWalkSpeed=420.f; ServerSetAiming(true); ServerSetSprinting(false); }
+void ASPCharacter::MoveForward(float V){ if(CanUseLocalControls() && V!=0.f) AddMovementInput(GetActorForwardVector(),V * (Health?Health->LegSpeedMultiplier:1.f)); }
+void ASPCharacter::MoveRight(float V){ if(CanUseLocalControls() && V!=0.f) AddMovementInput(GetActorRightVector(),V * (Health?Health->LegSpeedMultiplier:1.f)); }
+void ASPCharacter::Turn(float V){ if(!CanUseLocalControls()) return; const auto* PC=Cast<ASPObserverPlayerController>(GetController()); AddControllerYawInput(V*(PC?PC->GetMouseSensitivity():1.f)*(bAiming?GetDefault<USPControlSettings>()->GetSafeAimSensitivityMultiplier():1.f)); }
+void ASPCharacter::LookUp(float V){ if(!CanUseLocalControls()) return; const auto* PC=Cast<ASPObserverPlayerController>(GetController()); AddControllerPitchInput(V*(PC?PC->GetMouseSensitivity():1.f)*(bAiming?GetDefault<USPControlSettings>()->GetSafeAimSensitivityMultiplier():1.f)*(PC && PC->IsMouseYInverted()?-1.f:1.f)); }
+void ASPCharacter::Fire(){ if(!CanUseLocalControls()) return; const AGameStateBase* GS=GetWorld()?GetWorld()->GetGameState():nullptr; const float ShotTime=GS?GS->GetServerWorldTimeSeconds():(GetWorld()?GetWorld()->GetTimeSeconds():0.f); ServerFire(ShotTime); }
+void ASPCharacter::Reload(){ if(!CanUseLocalControls()) return; ServerReload(); }
+void ASPCharacter::BeginSilent(){ if(!CanUseLocalControls()) return; EndSprint(); bSilentMovement=true; Crouch(); ServerSetSilentMovement(true); }
+void ASPCharacter::EndSilent(){ bSilentMovement=false; UnCrouch(); ServerSetSilentMovement(false); }
+void ASPCharacter::ServerSetSilentMovement_Implementation(bool bEnabled){ bSilentMovement=bEnabled && CanPerformCharacterActions(); if(bEnabled){bSprinting=false;GetCharacterMovement()->MaxWalkSpeed=420.f;} }
+void ASPCharacter::ServerFire_Implementation(float ClientServerTimeSeconds){ if(CanPerformCharacterActions() && EquippedWeapon) EquippedWeapon->ServerTryFire(this,ClientServerTimeSeconds); }
+void ASPCharacter::ServerReload_Implementation(){ if(CanPerformCharacterActions() && EquippedWeapon) EquippedWeapon->ServerReload(); }
+void ASPCharacter::BeginAim(){ if(!CanUseLocalControls()) return; if(GetDefault<USPControlSettings>()->bToggleAim && bAiming){ EndAim(); return; } bAiming=true; bSprinting=false; GetCharacterMovement()->MaxWalkSpeed=420.f; ServerSetAiming(true); ServerSetSprinting(false); }
+void ASPCharacter::ReleaseAimKey(){ if(!GetDefault<USPControlSettings>()->bToggleAim) EndAim(); }
 void ASPCharacter::EndAim(){ bAiming=false; ServerSetAiming(false); }
-void ASPCharacter::BeginSprint(){ if(Stamina<=2.f || bSilentMovement || bAiming) return; bSprinting=true; GetCharacterMovement()->MaxWalkSpeed=620.f; ServerSetSprinting(true); }
+void ASPCharacter::BeginSprint(){ if(!CanUseLocalControls()) return; if(Stamina<=2.f || bSilentMovement || bAiming) return; bSprinting=true; GetCharacterMovement()->MaxWalkSpeed=620.f; ServerSetSprinting(true); }
 void ASPCharacter::EndSprint(){ bSprinting=false; GetCharacterMovement()->MaxWalkSpeed=420.f; ServerSetSprinting(false); }
-void ASPCharacter::CycleEquipment(){ if(TacticalEquipment) TacticalEquipment->CycleEquipment(); }
-void ASPCharacter::ThrowEquipment(){ if(!TacticalEquipment) return; const FVector Target=GetActorLocation()+GetControlRotation().Vector()*800.f; TacticalEquipment->DeploySelected(Target); }
-void ASPCharacter::CycleSquadOrder(){ ServerCycleSquadOrder(); }
-void ASPCharacter::Fortify(){ ServerFortify(); }
-void ASPCharacter::BeginLeanLeft(){ LeanAlpha=-1.f; ServerSetLean(-1.f); }
-void ASPCharacter::EndLeanLeft(){ LeanAlpha=0.f; ServerSetLean(0.f); }
-void ASPCharacter::BeginLeanRight(){ LeanAlpha=1.f; ServerSetLean(1.f); }
-void ASPCharacter::EndLeanRight(){ LeanAlpha=0.f; ServerSetLean(0.f); }
-void ASPCharacter::Vault(){ ServerVault(); }
-void ASPCharacter::CycleOptic(){ ServerCycleOptic(); }
-void ASPCharacter::InspectWeapon(){ if(!bSprinting) BP_InspectWeapon(); }
+void ASPCharacter::CycleEquipment(){ if(!CanUseLocalControls()) return; if(TacticalEquipment) TacticalEquipment->CycleEquipment(); }
+void ASPCharacter::ThrowEquipment(){ if(!CanUseLocalControls()) return; if(!TacticalEquipment) return; const FVector Target=GetActorLocation()+GetControlRotation().Vector()*800.f; TacticalEquipment->DeploySelected(Target); }
+void ASPCharacter::CycleSquadOrder(){ if(!CanUseLocalControls()) return; ServerCycleSquadOrder(); }
+void ASPCharacter::Fortify(){ if(!CanUseLocalControls()) return; ServerFortify(); }
+void ASPCharacter::BeginLeanLeft(){ if(!CanUseLocalControls()) return; HeldLean.Left=true; UpdateHeldLean(); }
+void ASPCharacter::EndLeanLeft(){ HeldLean.Left=false; UpdateHeldLean(); }
+void ASPCharacter::BeginLeanRight(){ if(!CanUseLocalControls()) return; HeldLean.Right=true; UpdateHeldLean(); }
+void ASPCharacter::EndLeanRight(){ HeldLean.Right=false; UpdateHeldLean(); }
+void ASPCharacter::Vault(){ if(!CanUseLocalControls()) return; ServerVault(); }
+void ASPCharacter::CycleOptic(){ if(!CanUseLocalControls()) return; ServerCycleOptic(); }
+void ASPCharacter::InspectWeapon(){ if(!CanUseLocalControls()) return; if(!bSprinting) BP_InspectWeapon(); }
 
 void ASPCharacter::UpdateCoverStateAuthority()
 {
@@ -94,23 +105,23 @@ void ASPCharacter::UpdateCoverStateAuthority()
 
 void ASPCharacter::ServerSetLean_Implementation(float Value)
 {
-    LeanAlpha=FMath::Clamp(Value,-1.f,1.f);
+    LeanAlpha=CanPerformCharacterActions() && FMath::IsFinite(Value) ? FMath::Clamp(Value,-1.f,1.f) : 0.f;
     UpdateCoverStateAuthority();
     if(CoverSystem) CoverSystem->ServerSetPeekAlpha(LeanAlpha);
 }
-void ASPCharacter::ServerCycleOptic_Implementation(){ OpticMode=OpticMode==ESPOpticMode::Reflex1x?ESPOpticMode::Magnifier2x:ESPOpticMode::Reflex1x; }
+void ASPCharacter::ServerCycleOptic_Implementation(){ if(!CanPerformCharacterActions()) return; OpticMode=OpticMode==ESPOpticMode::Reflex1x?ESPOpticMode::Magnifier2x:ESPOpticMode::Reflex1x; }
 void ASPCharacter::ServerVault_Implementation(){
-    if(bVaulting || bSprinting) return;
+    if(!CanPerformCharacterActions() || bVaulting || bSprinting) return;
     const FVector Start=GetActorLocation()+FVector(0,0,45.f),Forward=GetActorForwardVector(),LowEnd=Start+Forward*120.f,HighStart=GetActorLocation()+FVector(0,0,135.f),HighEnd=HighStart+Forward*120.f;
     FCollisionQueryParams Params(SCENE_QUERY_STAT(SPVault),false,this);FHitResult LowHit,HighHit;const bool bLow=GetWorld()->LineTraceSingleByChannel(LowHit,Start,LowEnd,ECC_Visibility,Params);const bool bHigh=GetWorld()->LineTraceSingleByChannel(HighHit,HighStart,HighEnd,ECC_Visibility,Params);
     if(!bLow || bHigh) return;bVaulting=true;LaunchCharacter(Forward*320.f+FVector(0,0,230.f),true,true);FTimerHandle H;GetWorldTimerManager().SetTimer(H,[this](){bVaulting=false;},.55f,false);
 }
-void ASPCharacter::ServerSetAiming_Implementation(bool bEnabled){ bAiming=bEnabled; if(bAiming){bSprinting=false;GetCharacterMovement()->MaxWalkSpeed=420.f;} }
-void ASPCharacter::ServerSetSprinting_Implementation(bool bEnabled){ bSprinting=bEnabled && Stamina>2.f && !bSilentMovement && !bAiming; GetCharacterMovement()->MaxWalkSpeed=bSprinting?620.f:420.f; }
-void ASPCharacter::ServerCycleSquadOrder_Implementation(){ SquadOrder = SquadOrder==ESPSquadOrder::Follow ? ESPSquadOrder::Hold : SquadOrder==ESPSquadOrder::Hold ? ESPSquadOrder::Assault : ESPSquadOrder::Follow; }
+void ASPCharacter::ServerSetAiming_Implementation(bool bEnabled){ bAiming=bEnabled && CanPerformCharacterActions(); if(bAiming){bSprinting=false;GetCharacterMovement()->MaxWalkSpeed=420.f;} }
+void ASPCharacter::ServerSetSprinting_Implementation(bool bEnabled){ bSprinting=bEnabled && CanPerformCharacterActions() && Stamina>2.f && !bSilentMovement && !bAiming; GetCharacterMovement()->MaxWalkSpeed=bSprinting?620.f:420.f; }
+void ASPCharacter::ServerCycleSquadOrder_Implementation(){ if(!CanPerformCharacterActions()) return; SquadOrder = SquadOrder==ESPSquadOrder::Follow ? ESPSquadOrder::Hold : SquadOrder==ESPSquadOrder::Hold ? ESPSquadOrder::Assault : ESPSquadOrder::Follow; }
 void ASPCharacter::ServerFortify_Implementation()
 {
-    if(!BarricadeClass || BarricadesRemaining<=0) return;
+    if(!CanPerformCharacterActions() || !BarricadeClass || BarricadesRemaining<=0) return;
     const FVector Start=GetActorLocation()+FVector(0,0,45.f),End=Start+GetActorForwardVector()*180.f;
     FHitResult Hit; FCollisionQueryParams Params(SCENE_QUERY_STAT(SPFortify),false,this);
     if(!GetWorld()->LineTraceSingleByChannel(Hit,Start,End,ECC_Visibility,Params)) return;
@@ -123,7 +134,37 @@ void ASPCharacter::ServerFortify_Implementation()
         Barricade->ServerDeploy(Team); --BarricadesRemaining;
     }
 }
-void ASPCharacter::Tick(float DT){ Super::Tick(DT); if(!HasAuthority()) return; if(bSprinting){Stamina=FMath::Max(0.f,Stamina-DT*22.f);if(Stamina<=0.f){bSprinting=false;GetCharacterMovement()->MaxWalkSpeed=420.f;}}else Stamina=FMath::Min(100.f,Stamina+DT*10.f); }
+void ASPCharacter::Tick(float DT)
+{
+    Super::Tick(DT);
+    if (FirstPersonCamera) FirstPersonCamera->SetRelativeLocation(FVector(0.f, 0.f, BaseEyeHeight));
+    if (IsLocallyControlled())
+    {
+        const bool bControlsUsable = CanUseLocalControls();
+        // Clear on the transition, not every frame: releases send RPCs.
+        if (bLocalControlsWereUsable && !bControlsUsable) ReleaseHeldControls();
+        bLocalControlsWereUsable = bControlsUsable;
+        GetCharacterMovement()->MaxWalkSpeed = bSprinting ? 620.f : 420.f;
+    }
+    if (!HasAuthority()) return;
+    // Remote clients may never send releases after being downed or eliminated.
+    if (!CanPerformCharacterActions())
+    {
+        bAiming = false;
+        bSprinting = false;
+        bSilentMovement = false;
+        LeanAlpha = 0.f;
+        UnCrouch();
+        GetCharacterMovement()->MaxWalkSpeed = 420.f;
+        if (CoverSystem && CoverSystem->PeekAlpha != 0.f) CoverSystem->ServerSetPeekAlpha(0.f);
+    }
+    if (bSprinting)
+    {
+        Stamina = FMath::Max(0.f, Stamina - DT * 22.f);
+        if (Stamina <= 0.f) { bSprinting = false; GetCharacterMovement()->MaxWalkSpeed = 420.f; }
+    }
+    else Stamina = FMath::Min(100.f, Stamina + DT * 10.f);
+}
 
 void ASPCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
@@ -138,4 +179,28 @@ void ASPCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
     DOREPLIFETIME(ASPCharacter, OpticMode);
     DOREPLIFETIME(ASPCharacter, SquadOrder);
     DOREPLIFETIME(ASPCharacter, BarricadesRemaining);
+}
+
+bool ASPCharacter::CanPerformCharacterActions() const
+{
+    return Health && Health->IsAlive() && !Health->bDowned;
+}
+
+bool ASPCharacter::CanUseLocalControls() const
+{
+    const auto* PC = Cast<ASPObserverPlayerController>(GetController());
+    return IsLocallyControlled() && CanPerformCharacterActions()
+        && (!PC || !PC->IsGameplayInputBlocked());
+}
+void ASPCharacter::UpdateHeldLean()
+{
+    const float NewLean = HeldLean.Value();
+    if (LeanAlpha != NewLean) { LeanAlpha = NewLean; ServerSetLean(NewLean); }
+}
+void ASPCharacter::ReleaseHeldControls()
+{
+    if (!IsLocallyControlled()) return;
+    EndAim(); EndSprint(); EndSilent();
+    HeldLean.Reset();
+    UpdateHeldLean();
 }

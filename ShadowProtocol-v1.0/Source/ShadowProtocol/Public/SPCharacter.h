@@ -2,9 +2,11 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "SPTypes.h"
+#include "SPHeldLeanState.h"
 #include "SPCharacter.generated.h"
 
 class USPHealthComponent;
+class UCameraComponent;
 class ASPWeaponBase;
 class USPTacticalEquipmentComponent;
 class ASPBarricade;
@@ -21,6 +23,8 @@ public:
     virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
     virtual void Tick(float DeltaSeconds) override;
 
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Camera") TObjectPtr<UCameraComponent> FirstPersonCamera;
+    void ReleaseHeldControls();
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly) TObjectPtr<USPHealthComponent> Health;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly) TObjectPtr<USPTacticalEquipmentComponent> TacticalEquipment;
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly) TObjectPtr<USPLagCompensationComponent> LagCompensation;
@@ -45,7 +49,7 @@ public:
     UFUNCTION(Server, Reliable) void ServerSetSprinting(bool bEnabled);
     UFUNCTION(Server, Reliable) void ServerCycleSquadOrder();
     UFUNCTION(Server, Reliable) void ServerFortify();
-    UFUNCTION(Server, Unreliable) void ServerSetLean(float Value);
+    UFUNCTION(Server, Reliable) void ServerSetLean(float Value);
     UFUNCTION(Server, Reliable) void ServerVault();
     UFUNCTION(Server, Reliable) void ServerCycleOptic();
     UFUNCTION(BlueprintImplementableEvent, Category="Weapon") void BP_InspectWeapon();
@@ -54,9 +58,14 @@ public:
 protected:
     void MoveForward(float V); void MoveRight(float V); void Turn(float V); void LookUp(float V);
     void Fire(); void Reload(); void BeginSilent(); void EndSilent();
-    void BeginAim(); void EndAim(); void BeginSprint(); void EndSprint();
+    void BeginAim(); void EndAim(); void ReleaseAimKey(); void BeginSprint(); void EndSprint();
     void CycleEquipment(); void ThrowEquipment(); void CycleSquadOrder(); void Fortify();
     void BeginLeanLeft(); void EndLeanLeft(); void BeginLeanRight(); void EndLeanRight(); void Vault(); void CycleOptic(); void InspectWeapon();
     void UpdateCoverStateAuthority();
+    bool CanUseLocalControls() const;
+    bool CanPerformCharacterActions() const;
+    bool bLocalControlsWereUsable = false;
+    FSPHeldLeanState HeldLean;
+    void UpdateHeldLean();
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 };
