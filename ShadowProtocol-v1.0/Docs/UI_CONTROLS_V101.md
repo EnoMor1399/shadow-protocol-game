@@ -164,3 +164,7 @@ in this environment; CI checks source wiring and existing regression suites.
 ### Scoreboard binding continuation
 
 The scoreboard action now supports saved keyboard/mouse rebinding and confirmed swaps. F2 remains the default. HUD hold/release prompts read current action mappings, including modifier labels for project defaults. Reset restores the original mapping. UE validation pending: rebind scoreboard, swap with a combat action, reopen settings, restart client, and check hold/release and menu cleanup with the new key.
+
+### Scoreboard toggle preference
+
+Added a saved press-to-toggle scoreboard option in HUD preferences. Hold remains the default. Both help prompts use the selected mode and live binding. Key release closes only hold mode; a second press closes toggle mode. Opening the controls or ready-room modal clears either mode. HUD reset restores hold without resetting action bindings. The final roster remains visible at match completion. UE runtime validation pending: both modes, remapped keys, menu transitions, saved preference after restart, HUD reset and match completion.

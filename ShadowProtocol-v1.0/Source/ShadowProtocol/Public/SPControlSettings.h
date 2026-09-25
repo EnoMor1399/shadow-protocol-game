@@ -15,6 +15,7 @@ public:
     UPROPERTY(Config) bool bHighContrastHUD = false;
     UPROPERTY(Config) bool bShowCrosshair = true;
     UPROPERTY(Config) bool bShowHUDHints = true;
+    UPROPERTY(Config) bool bToggleScoreboard = false;
     UPROPERTY(Config) float CrosshairScale = 1.f;
     float GetSafeCrosshairScale() const;
     UPROPERTY(Config) TArray<FInputActionKeyMapping> ActionOverrides;

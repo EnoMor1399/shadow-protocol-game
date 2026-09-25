@@ -231,9 +231,10 @@ void ASPObserverPlayerController::ApplyInterfaceInputMode()
 
 void ASPObserverPlayerController::ShowScoreboard()
 {
-    if (IsLocalController() && !IsGameplayInputBlocked()) bScoreboardHeld = true;
+    if (IsLocalController() && !IsGameplayInputBlocked())
+        bScoreboardHeld = GetDefault<USPControlSettings>()->bToggleScoreboard ? !bScoreboardHeld : true;
 }
 void ASPObserverPlayerController::HideScoreboard()
 {
-    bScoreboardHeld = false;
+    if (!GetDefault<USPControlSettings>()->bToggleScoreboard) bScoreboardHeld = false;
 }

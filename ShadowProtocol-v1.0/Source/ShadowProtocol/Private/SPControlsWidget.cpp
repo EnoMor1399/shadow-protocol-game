@@ -87,6 +87,8 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
         CrosshairCheck->OnCheckStateChanged.AddUniqueDynamic(this, &USPControlsWidget::SetCrosshairVisible);
         HintsCheck = Check(TEXT("Show HUD help text"));
         HintsCheck->OnCheckStateChanged.AddUniqueDynamic(this, &USPControlsWidget::SetHUDHints);
+        ScoreboardToggleCheck = Check(TEXT("Press to toggle scoreboard (instead of holding)"));
+        ScoreboardToggleCheck->OnCheckStateChanged.AddUniqueDynamic(this, &USPControlsWidget::SetScoreboardToggle);
         CrosshairLabel = Label(TEXT("Crosshair size"), 18, FLinearColor::White);
         CrosshairSlider = WidgetTree->ConstructWidget<USlider>();
         CrosshairSlider->SetMinValue(0.75f); CrosshairSlider->SetMaxValue(2.5f); CrosshairSlider->SetStepSize(0.05f);
@@ -95,7 +97,7 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
         auto* ResetHUD = Button(TEXT("Reset HUD preferences"));
         ResetHUD->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ResetHUDPreferences);
         Label(TEXT("HUD changes appear when you return to play. Objective and player status remain visible when help text is hidden."), 16, FLinearColor::White);
-        Label(TEXT("Hold the scoreboard binding in gameplay to view team statistics. The match continues while viewing it."), 16, FLinearColor::White);
+        Label(TEXT("Use the scoreboard binding in gameplay to view team statistics. The match continues while viewing it."), 16, FLinearColor::White);
         Label(TEXT("MOVEMENT"), 20, FLinearColor(0.35f, 0.85f, 0.8f));
         const UInputSettings* Input = GetDefault<UInputSettings>();
         struct FControlHint { const TCHAR* Mapping; const TCHAR* Label; };
@@ -136,7 +138,7 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
             FControlHint{TEXT("CycleEquipment"), TEXT("Select equipment")}, FControlHint{TEXT("ThrowEquipment"), TEXT("Throw equipment")},
             FControlHint{TEXT("CycleOptic"), TEXT("Switch optic")}, FControlHint{TEXT("SquadOrder"), TEXT("Cycle squad order")},
             FControlHint{TEXT("Fortify"), TEXT("Fortify marked point")},
-            FControlHint{TEXT("Scoreboard"), TEXT("Scoreboard (hold)")}})
+            FControlHint{TEXT("Scoreboard"), TEXT("Scoreboard")}})
         {
             FString Keys;
             for (const auto& Mapping : Input->GetActionMappings())
@@ -167,6 +169,7 @@ void USPControlsWidget::NativeConstruct()
     ContrastCheck->SetIsChecked(HUDSettings->bHighContrastHUD);
     CrosshairCheck->SetIsChecked(HUDSettings->bShowCrosshair);
     HintsCheck->SetIsChecked(HUDSettings->bShowHUDHints);
+    ScoreboardToggleCheck->SetIsChecked(HUDSettings->bToggleScoreboard);
     CrosshairSlider->SetValue(HUDSettings->GetSafeCrosshairScale());
     SetCrosshairScale(HUDSettings->GetSafeCrosshairScale());
     CrosshairSlider->SetIsEnabled(HUDSettings->bShowCrosshair);
@@ -363,6 +366,13 @@ void USPControlsWidget::SetCrosshairScale(float Value)
 void USPControlsWidget::ResetHUDPreferences()
 {
     ContrastCheck->SetIsChecked(false); CrosshairCheck->SetIsChecked(true); HintsCheck->SetIsChecked(true);
+    ScoreboardToggleCheck->SetIsChecked(false);
+    SetScoreboardToggle(false);
     CrosshairSlider->SetValue(1.f);
     SetHUDContrast(false); SetCrosshairVisible(true); SetHUDHints(true); SetCrosshairScale(1.f);
+}
+
+void USPControlsWidget::SetScoreboardToggle(bool bEnabled)
+{
+    GetMutableDefault<USPControlSettings>()->bToggleScoreboard = bEnabled;
 }

@@ -27,6 +27,8 @@ private:
     UPROPERTY(Transient) TObjectPtr<UCheckBox> ContrastCheck;
     UPROPERTY(Transient) TObjectPtr<UCheckBox> CrosshairCheck;
     UPROPERTY(Transient) TObjectPtr<UCheckBox> HintsCheck;
+    UPROPERTY(Transient) TObjectPtr<UCheckBox> ScoreboardToggleCheck;
+    UFUNCTION() void SetScoreboardToggle(bool bEnabled);
     UPROPERTY(Transient) TObjectPtr<USlider> CrosshairSlider;
     UPROPERTY(Transient) TObjectPtr<UTextBlock> CrosshairLabel;
     UFUNCTION() void SetHUDContrast(bool bEnabled);
