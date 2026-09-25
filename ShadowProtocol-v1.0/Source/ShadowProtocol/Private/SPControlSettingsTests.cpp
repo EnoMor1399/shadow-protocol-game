@@ -10,7 +10,9 @@ bool FSPRebindingTest::RunTest(const FString& Parameters)
 {
     auto* Input = GetMutableDefault<UInputSettings>();
     const auto Before = Input->GetActionMappings();
+    const auto BeforeAxes = Input->GetAxisMappings();
     auto* Settings = NewObject<USPControlSettings>();
+    Settings->MovementKeys.Reset();
     FString Error;
     // Disable persistence on swap calls: tests must never change stored player preferences.
     for (FKey Key : {EKeys::Escape, EKeys::Tab, EKeys::W, EKeys::LeftMouseButton})
@@ -70,6 +72,79 @@ bool FSPRebindingTest::RunTest(const FString& Parameters)
     const auto Current = Input->GetActionMappings();
     for (const auto& Mapping : Current) Input->RemoveActionMapping(Mapping, false);
     for (const auto& Mapping : Before) Input->AddActionMapping(Mapping, false);
+    const auto CurrentAxes = Input->GetAxisMappings();
+    for (const auto& Mapping : CurrentAxes) Input->RemoveAxisMapping(Mapping, false);
+    for (const auto& Mapping : BeforeAxes) Input->AddAxisMapping(Mapping, false);
+    Input->ForceRebuildKeymaps();
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSPMovementRebindingTest, "ShadowProtocol.Controls.MovementRebinding",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FSPMovementRebindingTest::RunTest(const FString& Parameters)
+{
+    auto* Input = GetMutableDefault<UInputSettings>();
+    const auto Before = Input->GetActionMappings();
+    const auto BeforeAxes = Input->GetAxisMappings();
+    auto* Settings = NewObject<USPControlSettings>();
+    Settings->ActionOverrides.Reset();
+    Settings->MovementKeys.Reset();
+    FString Error;
+    const TArray<FKey> Arrows = {EKeys::Up, EKeys::Down, EKeys::Left, EKeys::Right};
+    TestTrue(TEXT("Apply all four arrow keys"), Settings->SetMovementKeys(Arrows, Error, false));
+    TestTrue(TEXT("Forward is positive"), Input->GetAxisMappings().Contains(FInputAxisKeyMapping(TEXT("MoveForward"), EKeys::Up, 1.f)));
+    TestTrue(TEXT("Backward is negative"), Input->GetAxisMappings().Contains(FInputAxisKeyMapping(TEXT("MoveForward"), EKeys::Down, -1.f)));
+    TestTrue(TEXT("Left is negative"), Input->GetAxisMappings().Contains(FInputAxisKeyMapping(TEXT("MoveRight"), EKeys::Left, -1.f)));
+    TestTrue(TEXT("Right is positive"), Input->GetAxisMappings().Contains(FInputAxisKeyMapping(TEXT("MoveRight"), EKeys::Right, 1.f)));
+    for (const auto& Mapping : BeforeAxes)
+        if (Mapping.Key.IsGamepadKey() || Mapping.AxisName == TEXT("Turn") || Mapping.AxisName == TEXT("LookUp"))
+            TestTrue(TEXT("Look and gamepad axes survive"), Input->GetAxisMappings().Contains(Mapping));
+    const auto ActiveActions = Input->GetActionMappings();
+    const auto ActiveAxes = Input->GetAxisMappings();
+    for (const FKey BadKey : {EKeys::Up, EKeys::R, EKeys::Escape, EKeys::Tab, EKeys::Enter,
+        EKeys::LeftMouseButton, EKeys::MouseX, EKeys::Gamepad_LeftX, EKeys::AnyKey, FKey()})
+    {
+        TestFalse(TEXT("Invalid/conflicting movement layout is denied"),
+            Settings->SetMovementKeys({EKeys::Up, BadKey, EKeys::Left, EKeys::Right}, Error, false));
+        TestTrue(TEXT("Rejected layout preserves actions"), ActiveActions == Input->GetActionMappings());
+        TestTrue(TEXT("Rejected layout preserves axes"), ActiveAxes == Input->GetAxisMappings());
+        TestTrue(TEXT("Rejected layout preserves saved keys"), Settings->MovementKeys == Arrows);
+    }
+    TestFalse(TEXT("Partial layout is denied"), Settings->SetMovementKeys({EKeys::Up}, Error, false));
+    TestTrue(TEXT("Saved layout can reload without duplicating axes"), Settings->ApplyActionOverrides(Error));
+    TestTrue(TEXT("Reloaded layout is identical"), ActiveAxes == Input->GetAxisMappings());
+    TestTrue(TEXT("Directions can swap in one batch"),
+        Settings->SetMovementKeys({EKeys::Down, EKeys::Up, EKeys::Right, EKeys::Left}, Error, false));
+    TestTrue(TEXT("Swapped forward direction installed"), Input->GetAxisMappings().Contains(FInputAxisKeyMapping(TEXT("MoveForward"), EKeys::Down, 1.f)));
+
+    Settings->ActionOverrides = {FInputActionKeyMapping(TEXT("Reload"), EKeys::W)};
+    TestTrue(TEXT("Former movement key can become an action"), Settings->ApplyActionOverrides(Error));
+    const auto WithFreedKey = Input->GetActionMappings();
+    const auto BeforeConflict = Input->GetAxisMappings();
+    TestFalse(TEXT("Restoring movement cannot steal a saved action key"),
+        Settings->SetMovementKeys({}, Error, false));
+    TestTrue(TEXT("Cross-conflict preserves actions"), WithFreedKey == Input->GetActionMappings());
+    TestTrue(TEXT("Cross-conflict preserves axes"), BeforeConflict == Input->GetAxisMappings());
+    Settings->ActionOverrides = {FInputActionKeyMapping(TEXT("Reload"), EKeys::Up)};
+    TestFalse(TEXT("Action cannot steal a current movement key"), Settings->ApplyActionOverrides(Error));
+
+    Settings->MouseSensitivity = 1.7f;
+    Settings->bToggleAim = true;
+    Settings->bHighContrastHUD = true;
+    Settings->ResetAllBindings(false);
+    TestTrue(TEXT("Full reset clears both override sets"), Settings->ActionOverrides.IsEmpty() && Settings->MovementKeys.IsEmpty());
+    TestTrue(TEXT("Full reset restores W forward"), Input->GetAxisMappings().Contains(FInputAxisKeyMapping(TEXT("MoveForward"), EKeys::W, 1.f)));
+    TestEqual(TEXT("Reset preserves sensitivity"), Settings->MouseSensitivity, 1.7f);
+    TestTrue(TEXT("Reset preserves aim/HUD preferences"), Settings->bToggleAim && Settings->bHighContrastHUD);
+
+    // Restore the runtime snapshot; no test mutation is persisted.
+    const auto Current = Input->GetActionMappings();
+    for (const auto& Mapping : Current) Input->RemoveActionMapping(Mapping, false);
+    for (const auto& Mapping : Before) Input->AddActionMapping(Mapping, false);
+    const auto CurrentAxes = Input->GetAxisMappings();
+    for (const auto& Mapping : CurrentAxes) Input->RemoveAxisMapping(Mapping, false);
+    for (const auto& Mapping : BeforeAxes) Input->AddAxisMapping(Mapping, false);
     Input->ForceRebuildKeymaps();
     return true;
 }

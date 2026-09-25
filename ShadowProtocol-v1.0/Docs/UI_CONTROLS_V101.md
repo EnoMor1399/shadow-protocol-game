@@ -14,11 +14,11 @@ the existing owning-controller RPC and authoritative GameMode checks.
 
 Press Escape in gameplay or the ready room to open controls. Escape or Return to
 game closes it. Tab navigates UMG controls; sensitivity and invert-Y have native
-slider/checkbox controls. Settings apply immediately and save to local
+slider/checkbox controls. Mouse/HUD settings apply immediately and save to local
 GameUserSettings config on closing or controller teardown. The settings currently
 apply to the machine profile, not separate split-screen player profiles. Sensitivity
 is clamped to 0.25–3.0, including validation of invalid/non-finite config values.
-Reset restores only mouse preferences. Action rebinding is described below; gamepad navigation remains pending. The control reference reads current input mappings,
+Separate reset buttons cover mouse, HUD, and all key bindings. Movement edits require Apply; action rebinding saves immediately. Details follow; gamepad navigation remains pending. The control reference reads current input mappings,
 and excludes config-only actions without native implementation.
 
 Opening/closing UI releases aim, sprint, crouch and both lean directions, then
@@ -30,8 +30,8 @@ match is never paused by the controls panel.
 Native pawn changes enable crouching, add a control-rotation first-person camera,
 apply mouse preferences, and fix simultaneous lean-key release order. Crouching
 cancels sprint locally and on the server. These changes do not add automatic fire,
-weapon assets, interaction/hacking, a tactical map, lean-camera animation or
-server-side combat permission changes. Existing weapon/fortification/equipment
+weapon assets, interaction/hacking, a tactical map or lean-camera animation.
+Character health-based action checks are described under incapacitated controls. Existing weapon/fortification/equipment
 content must be configured for their corresponding actions to produce gameplay.
 
 ## Validation
@@ -83,14 +83,14 @@ checks cover the wiring; engine/UHT and packaged UI verification remain pending.
 ## Action key rebinding
 
 The combat/tactics section now includes an action picker, native key-capture
-control and Restore original action bindings button. Select an action, click its
+control and Restore all original key bindings button. Select an action, click its
 key and press a keyboard key or mouse button. Escape cancels capture before it
 closes the panel. Successful changes immediately refresh the displayed bindings.
 
 Rebinding supports one keyboard/mouse binding per supported action. It replaces
 that action's existing keyboard/mouse alternatives; gamepad mappings are retained.
-Movement axes, menu controls, modifier combinations and gamepad remapping remain
-outside this pass. Movement/look axes, console keys, reserved navigation keys and
+Movement keyboard bindings have a separate editor below. Menu controls, mouse-look
+axes, modifier combinations and gamepad remapping remain fixed. Movement/look axes, console keys, reserved navigation keys and
 unsupported/config-only actions still fail closed without changing live mappings.
 
 When the selected key is already owned by another supported combat/tactics action,
@@ -102,9 +102,10 @@ fails, the previous live bindings remain intact. Changing the selected action,
 closing the panel or restoring defaults clears any pending swap confirmation.
 Saved swaps are loaded and validated as one atomic candidate.
 
-Only our action overrides are saved to GameUserSettings; project Input defaults
-are not rewritten. RebuildKeymaps applies the runtime change. Restore resets action
-bindings to the process's original project mappings and preserves mouse settings.
+Action overrides and movement keys are saved to GameUserSettings; project Input defaults
+are not rewritten. RebuildKeymaps applies the runtime change. Restore all resets both
+action and axis bindings to the process's original project mappings and preserves
+mouse and HUD settings. Resetting both together avoids conflicts with reclaimed keys.
 Settings remain machine-wide, including all PIE/local-player instances in that
 process. Invalid saved overrides are ignored with feedback in the controls panel;
 Restore recovers the baseline. Reopening PIE after editing project defaults may
@@ -141,8 +142,8 @@ separate resets, and objective text across waiting/preparation/action/post-round
 
 ## 5v5 scoreboard
 
-Hold F2 during gameplay to view the two team rosters, K/D/A and tactical scores.
-Release F2 to return. This is a read-only overlay: movement and gameplay continue,
+By default, hold F2 during gameplay to view the two team rosters, K/D/A and tactical scores.
+Release F2 to return. A saved toggle option and alternate key binding are available. This is a read-only overlay: movement and gameplay continue,
 no mouse capture or pause is added. Opening a modal clears the held scoreboard
 state; closing settings cannot leave it stuck open. The final roster appears
 automatically at match completion and remains accessible without a pawn.
@@ -154,8 +155,7 @@ post-match/disconnected-player result storage remains separate work. Names are
 length-limited and stripped of line breaks/tabs for layout. The overlay exposes no
 positions, health or backend account/session IDs. HUD high contrast applies.
 
-F2 is a fixed scoreboard binding in this pass and is unavailable as a conflicting
-combat rebind. Tab remains available for menu navigation and the future tactical
+F2 is the default scoreboard binding; it can be rebound or swapped in controls. Tab remains available for menu navigation and the future tactical
 map. Verify two-client score replication, reconnect/missing-PlayerState rows,
 match completion without a pawn, F2 hold/release and Escape transitions, and
 720p/1080p/ultrawide layout in UE. Engine compilation/rendering remain unverified
@@ -186,3 +186,53 @@ Added saved toggle aiming (default off). First aim press enters aim, second exit
 ### Preserve alternate bindings during swaps
 
 Confirmed swaps now require exactly one unmodified keyboard/mouse binding per action. Multiple bindings and modifier chords are rejected before mutation, preserving both actions and saved overrides. Gamepad alternatives are excluded from this count and retained. Direct single-key reassignment remains an explicit replacement. The Unreal atomic-rebinding test now disables persistence for swaps and checks alternate keys on either action plus modifier-chord rejection. Engine test execution remains pending; source checks are not a substitute for Unreal automation.
+
+
+## Keyboard movement editor
+
+The movement section provides four labelled key selectors: forward, backward,
+strafe left and strafe right. WASD and arrow-key presets fill a draft. **Apply
+movement keys** validates and saves all four directions together; editing or
+selecting a preset has no effect until Apply. **Discard movement draft** reloads
+the live layout, which remains visible in the active-layout summary. Closing the
+menu also discards the draft. Escape cancels key capture before closing the panel.
+
+Applying replaces all keyboard movement alternatives with the four chosen keys,
+using axis scales +1/-1. Mouse look, other axes and gamepad/analog movement mappings
+are preserved. This does not implement gamepad navigation or gamepad remapping.
+Only single keyboard keys are accepted: duplicates, mouse buttons, analog input,
+modifier combinations, menu/console keys and conflicts with action/other-axis
+bindings are rejected. Failed validation changes neither live maps nor saved keys.
+
+Action and movement candidates are validated together before either map is
+installed. This allows moving from WASD to arrows, then assigning the freed W key
+to a combat action. Returning to WASD is rejected until that action moves elsewhere.
+**Restore all original key bindings** resets both action and movement overrides
+together without changing mouse/aim/HUD preferences. It also recovers malformed
+saved layouts. Like action bindings, the original axis map is captured once per
+process; restart the editor after changing project defaults.
+
+### Validation matrix (engine execution pending)
+
+Run `ShadowProtocol.Controls.AtomicRebinding` and
+`ShadowProtocol.Controls.MovementRebinding` with the stock project input defaults.
+Both tests restore action/axis runtime snapshots and disable config persistence.
+The movement test covers signed directions, duplicate/reserved/occupied/invalid
+keys, partial layouts, saved-layout reload, direction swaps, cross-conflicts,
+full reset and preference isolation. Existing look/gamepad mappings are checked
+when present in the fixture.
+
+| Packaged-client check | Expected behavior |
+| --- | --- |
+| Fill arrow preset, then discard or close | Original movement remains active |
+| Apply arrows, close, restart | Arrow keys move in the correct directions |
+| Swap forward/back and left/right in one draft | All four switch on Apply |
+| Enter duplicate or action-bound keys | Feedback explains rejection; active layout stays intact |
+| Move to arrows, bind Reload to W, then apply WASD | Rejected until W is freed; Restore all remains available |
+| Capture a key and press Escape | Capture cancels; a subsequent Escape closes controls |
+| Apply while movement/aim was held before menu entry | No action remains held; new inputs work after closing |
+| Use custom mouse axes or gamepad movement defaults | Those mappings survive keyboard layout changes |
+| Use 720p, 1080p, ultrawide and keyboard navigation | All selectors, presets, feedback and reset remain reachable |
+
+Node source contracts pass locally, but neither these engine automation tests nor
+rendered/input behavior can be verified here without UE5.6.

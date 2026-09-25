@@ -41,6 +41,14 @@ private:
     UFUNCTION() void SetHUDHints(bool bEnabled);
     UFUNCTION() void SetCrosshairScale(float Value);
     UFUNCTION() void ResetHUDPreferences();
+    UPROPERTY(Transient) TArray<TObjectPtr<UInputKeySelector>> MovementSelectors;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> MovementFeedback;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> MovementSummary;
+    void StageMovementKeys(const TArray<FKey>& Keys);
+    UFUNCTION() void ApplyMovementKeys();
+    UFUNCTION() void UseWASD();
+    UFUNCTION() void UseArrowKeys();
+    UFUNCTION() void RefreshMovementKeys();
     UPROPERTY(Transient) TObjectPtr<UComboBoxString> BindingAction;
     UPROPERTY(Transient) TObjectPtr<UInputKeySelector> BindingKey;
     UPROPERTY(Transient) TObjectPtr<UTextBlock> BindingFeedback;

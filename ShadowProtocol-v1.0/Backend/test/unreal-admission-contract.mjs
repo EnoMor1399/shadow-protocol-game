@@ -275,15 +275,15 @@ test('action rebinding validates candidates and confirms atomic swaps before cha
   const widgetHeader = await source('../../Source/ShadowProtocol/Public/SPControlsWidget.h');
   const widget = await source('../../Source/ShadowProtocol/Private/SPControlsWidget.cpp');
   const apply = settings.split('bool USPControlSettings::ApplyActionOverrides')[1].split('bool USPControlSettings::RebindAction')[0];
-  for (const guard of ['CanRebindAction', 'Seen.Contains', 'EKeys::Escape', 'EKeys::Tab', 'ConsoleKeys', 'GetAxisMappings', 'Existing.Key == Override.Key']) assert.ok(apply.includes(guard));
+  for (const guard of ['CanRebindAction', 'Seen.Contains', 'EKeys::Escape', 'EKeys::Tab', 'ConsoleKeys', 'CandidateAxes', 'Existing.Key == Override.Key']) assert.ok(apply.includes(guard));
   assert.ok(apply.indexOf('Candidate.RemoveAll') < apply.indexOf('Candidate.Add(Override)'));
-  assert.ok(apply.lastIndexOf('return false') < apply.indexOf('Install(Candidate)'));
+  assert.ok(apply.lastIndexOf('return false') < apply.indexOf('Install(Candidate, CandidateAxes)'));
   assert.doesNotMatch(settings, /SaveKeyMappings|Input->SaveConfig/);
   assert.match(settings, /ActionOverrides = Previous; return false/);
 
   assert.match(settingsHeader, /FindActionUsingKey/);
   assert.match(settingsHeader, /SwapActionBinding/);
-  const swap = settings.split('bool USPControlSettings::SwapActionBinding')[1].split('void USPControlSettings::ResetActionBindings')[0];
+  const swap = settings.split('bool USPControlSettings::SwapActionBinding')[1].split('bool USPControlSettings::SetMovementKeys')[0];
   assert.match(swap, /FindActionUsingKey\(NewKey, Action, CurrentOwner\)/);
   assert.match(swap, /ActionOverrides = PreviousOverrides/);
   assert.ok(swap.indexOf('ActionOverrides.Add(FInputActionKeyMapping(Action, NewKey))') < swap.indexOf('ApplyActionOverrides(Error)'));
@@ -348,4 +348,27 @@ test('character controls reject incapacitated actions and clear held state', asy
   const tick = cpp.split('void ASPCharacter::Tick')[1].split('void ASPCharacter::GetLifetimeReplicatedProps')[0];
   for (const reset of ['bAiming = false', 'bSprinting = false', 'bSilentMovement = false', 'LeanAlpha = 0.f'])
     assert.ok(tick.includes(reset), `authority must clear ${reset}`);
+});
+
+
+test('movement rebinding validates a complete layout before changing action or axis maps', async () => {
+  const settings = await source('../../Source/ShadowProtocol/Private/SPControlSettings.cpp');
+  const header = await source('../../Source/ShadowProtocol/Public/SPControlSettings.h');
+  const widget = await source('../../Source/ShadowProtocol/Private/SPControlsWidget.cpp');
+  assert.match(header, /UPROPERTY\(Config\) TArray<FKey> MovementKeys/);
+  const apply = settings.split('bool USPControlSettings::ApplyActionOverrides')[1].split('bool USPControlSettings::RebindAction')[0];
+  for (const guard of ['MovementKeys.Num() != 4', 'MovementSeen.Contains(Key)', 'IsKeyboardKey(Key)', 'Action.Key == Key', 'Axis.Key == Key'])
+    assert.ok(apply.includes(guard), guard);
+  assert.ok(apply.lastIndexOf('return false') < apply.indexOf('Install(Candidate, CandidateAxes)'));
+  const set = settings.split('bool USPControlSettings::SetMovementKeys')[1].split('void USPControlSettings::ResetAllBindings')[0];
+  assert.match(set, /MovementKeys = Previous; return false/);
+  assert.match(set, /if \(bSaveSettings\) SaveConfig/);
+  const reset = settings.split('void USPControlSettings::ResetAllBindings')[1].split('float USPControlSettings::GetSafeCrosshairScale')[0];
+  assert.match(reset, /ActionOverrides.Reset/);
+  assert.match(reset, /MovementKeys.Reset/);
+  assert.match(reset, /Install\(OriginalMappings\(\), OriginalAxes\(\)\)/);
+  const stage = widget.split('void USPControlsWidget::StageMovementKeys')[1].split('void USPControlsWidget::UseWASD')[0];
+  assert.doesNotMatch(stage, /SetMovementKeys|SaveConfig|ApplyActionOverrides/);
+  assert.match(widget, /SetMovementKeys\(Keys, Error\)/);
+  assert.match(widget, /Selector->GetIsSelectingKey\(\)/);
 });

@@ -22,11 +22,15 @@ public:
     UPROPERTY(Config) float CrosshairScale = 1.f;
     float GetSafeCrosshairScale() const;
     UPROPERTY(Config) TArray<FInputActionKeyMapping> ActionOverrides;
+    // Empty uses project defaults; otherwise forward, backward, left, right.
+    UPROPERTY(Config) TArray<FKey> MovementKeys;
+    bool SetMovementKeys(const TArray<FKey>& Keys, FString& Error, bool bSaveSettings = true);
+    // Validate and install action and movement overrides together.
     bool ApplyActionOverrides(FString& Error);
     bool RebindAction(FName Action, FKey Key, FString& Error);
     bool FindActionUsingKey(FKey Key, FName ExcludingAction, FName& OutAction) const;
     bool SwapActionBinding(FName Action, FName ConflictingAction, FKey NewKey, FString& Error, bool bSaveSettings = true);
-    void ResetActionBindings();
+    void ResetAllBindings(bool bSaveSettings = true);
     static FString GetActionKeyLabel(FName Action);
     static bool CanRebindAction(FName Action);
 };

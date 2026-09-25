@@ -334,3 +334,13 @@ Added saved toggle aiming (default off). First aim press enters aim, second exit
 ### Preserve alternate bindings during swaps
 
 Confirmed swaps now require exactly one unmodified keyboard/mouse binding per action. Multiple bindings and modifier chords are rejected before mutation, preserving both actions and saved overrides. Gamepad alternatives are excluded from this count and retained. Direct single-key reassignment remains an explicit replacement. The Unreal atomic-rebinding test now disables persistence for swaps and checks alternate keys on either action plus modifier-chord rejection. Engine test execution remains pending; source checks are not a substitute for Unreal automation.
+
+
+### Expanded keyboard movement controls
+
+- Added a four-direction movement editor with WASD/arrow drafts, explicit Apply, discard and active-layout summary.
+- Validate action and movement maps as one candidate; reject duplicates, reserved keys, malformed layouts and cross-conflicts before mutation.
+- Save movement keys independently of project Input defaults; preserve mouse look, gamepad/analog and unrelated axes.
+- Restore all original key bindings resets action and movement overrides together while preserving mouse/aim/HUD preferences.
+- Extend Escape capture cancellation to movement selectors and add Unreal movement automation with non-persistent setup/cleanup.
+- Consolidate stale UI/control documentation. Local source contracts cover wiring; UE5.6 build, automation and packaged-client input/render checks remain pending.

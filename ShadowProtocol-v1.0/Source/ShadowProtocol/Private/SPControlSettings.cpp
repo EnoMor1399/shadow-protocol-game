@@ -9,12 +9,25 @@ const TArray<FInputActionKeyMapping>& OriginalMappings()
     static const TArray<FInputActionKeyMapping> Original = GetDefault<UInputSettings>()->GetActionMappings();
     return Original;
 }
-void Install(const TArray<FInputActionKeyMapping>& Mappings)
+const TArray<FInputAxisKeyMapping>& OriginalAxes()
+{
+    static const TArray<FInputAxisKeyMapping> Original = GetDefault<UInputSettings>()->GetAxisMappings();
+    return Original;
+}
+bool IsKeyboardKey(FKey Key)
+{
+    return Key.IsValid() && Key.IsBindableToActions() && !Key.IsGamepadKey() && !Key.IsAnalog()
+        && !Key.IsMouseButton() && !Key.IsTouch() && !Key.IsGesture() && Key != EKeys::AnyKey;
+}
+void Install(const TArray<FInputActionKeyMapping>& Mappings, const TArray<FInputAxisKeyMapping>& Axes)
 {
     auto* Input = GetMutableDefault<UInputSettings>();
     const auto Old = Input->GetActionMappings();
     for (const auto& Mapping : Old) Input->RemoveActionMapping(Mapping, false);
     for (const auto& Mapping : Mappings) Input->AddActionMapping(Mapping, false);
+    const auto OldAxes = Input->GetAxisMappings();
+    for (const auto& Mapping : OldAxes) Input->RemoveAxisMapping(Mapping, false);
+    for (const auto& Mapping : Axes) Input->AddAxisMapping(Mapping, false);
     Input->ForceRebuildKeymaps();
     // Persist only our overrides in GameUserSettings, never rewrite project Input defaults.
 }
@@ -32,6 +45,45 @@ bool USPControlSettings::ApplyActionOverrides(FString& Error)
 {
     TArray<FInputActionKeyMapping> Candidate = OriginalMappings();
     const auto* Input = GetDefault<UInputSettings>();
+    TArray<FInputAxisKeyMapping> CandidateAxes = OriginalAxes();
+    if (!MovementKeys.IsEmpty())
+    {
+        if (MovementKeys.Num() != 4)
+        {
+            Error = TEXT("Choose all four movement keys before applying.");
+            return false;
+        }
+        // Replace keyboard movement only; retain mouse look, analog and gamepad axes.
+        CandidateAxes.RemoveAll([](const FInputAxisKeyMapping& Mapping)
+        {
+            return (Mapping.AxisName == TEXT("MoveForward") || Mapping.AxisName == TEXT("MoveRight"))
+                && IsKeyboardKey(Mapping.Key);
+        });
+        TSet<FKey> MovementSeen;
+        for (int32 Index = 0; Index < MovementKeys.Num(); ++Index)
+        {
+            const FKey Key = MovementKeys[Index];
+            if (!IsKeyboardKey(Key) || MovementSeen.Contains(Key) || Key == EKeys::Escape
+                || Key == EKeys::Tab || Key == EKeys::Enter || Key == EKeys::LeftCommand
+                || Key == EKeys::RightCommand || Input->ConsoleKeys.Contains(Key))
+            {
+                Error = TEXT("Movement needs four different keyboard keys. Menu, console, mouse and gamepad keys are unavailable.");
+                return false;
+            }
+            for (const auto& Axis : CandidateAxes)
+                if (Axis.Key == Key)
+                {
+                    Error = FString::Printf(TEXT("%s is already used by %s. Choose another movement key."),
+                        *Key.GetDisplayName().ToString(), *Axis.AxisName.ToString());
+                    return false;
+                }
+            MovementSeen.Add(Key);
+        }
+        CandidateAxes.Add(FInputAxisKeyMapping(TEXT("MoveForward"), MovementKeys[0], 1.f));
+        CandidateAxes.Add(FInputAxisKeyMapping(TEXT("MoveForward"), MovementKeys[1], -1.f));
+        CandidateAxes.Add(FInputAxisKeyMapping(TEXT("MoveRight"), MovementKeys[2], -1.f));
+        CandidateAxes.Add(FInputAxisKeyMapping(TEXT("MoveRight"), MovementKeys[3], 1.f));
+    }
     TSet<FName> Seen;
     for (const auto& Override : ActionOverrides)
     {
@@ -46,7 +98,7 @@ bool USPControlSettings::ApplyActionOverrides(FString& Error)
             return false;
         }
         Seen.Add(Override.ActionName);
-        for (const auto& Axis : Input->GetAxisMappings())
+        for (const auto& Axis : CandidateAxes)
             if (Axis.Key == Key) { Error = TEXT("That key is used for movement or look. Choose a different key."); return false; }
     }
     // Remove every overridden action first, allowing saved swaps to reload atomically.
@@ -62,7 +114,15 @@ bool USPControlSettings::ApplyActionOverrides(FString& Error)
             }
         Candidate.Add(Override);
     }
-    Install(Candidate);
+    for (const FKey Key : MovementKeys)
+        for (const auto& Action : Candidate)
+            if (Action.Key == Key)
+            {
+                Error = FString::Printf(TEXT("%s is assigned to %s. Rebind that action first or choose another movement key."),
+                    *Key.GetDisplayName().ToString(), *Action.ActionName.ToString());
+                return false;
+            }
+    Install(Candidate, CandidateAxes);
     Error.Reset();
     return true;
 }
@@ -156,11 +216,21 @@ bool USPControlSettings::SwapActionBinding(FName Action, FName ConflictingAction
     return true;
 }
 
-void USPControlSettings::ResetActionBindings()
+bool USPControlSettings::SetMovementKeys(const TArray<FKey>& Keys, FString& Error, bool bSaveSettings)
+{
+    const auto Previous = MovementKeys;
+    MovementKeys = Keys;
+    if (!ApplyActionOverrides(Error)) { MovementKeys = Previous; return false; }
+    if (bSaveSettings) SaveConfig();
+    return true;
+}
+
+void USPControlSettings::ResetAllBindings(bool bSaveSettings)
 {
     ActionOverrides.Reset();
-    Install(OriginalMappings());
-    SaveConfig();
+    MovementKeys.Reset();
+    Install(OriginalMappings(), OriginalAxes());
+    if (bSaveSettings) SaveConfig();
 }
 
 float USPControlSettings::GetSafeCrosshairScale() const

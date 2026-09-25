@@ -110,8 +110,25 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
         Label(TEXT("MOVEMENT"), 20, FLinearColor(0.35f, 0.85f, 0.8f));
         const UInputSettings* Input = GetDefault<UInputSettings>();
         struct FControlHint { const TCHAR* Mapping; const TCHAR* Label; };
-        for (const FControlHint& Hint : {FControlHint{TEXT("MoveForward"), TEXT("Forward / backward")},
-            FControlHint{TEXT("MoveRight"), TEXT("Strafe right / left")}, FControlHint{TEXT("Turn"), TEXT("Look horizontally")},
+        Label(TEXT("Choose four movement keys, then Apply to replace keyboard movement bindings. Presets fill the draft only. Closing this panel discards unapplied movement changes."), 16, FLinearColor::White);
+        MovementSummary = Label(TEXT("Active keyboard layout"), 16, FLinearColor::White);
+        MovementSelectors.Reset();
+        for (const TCHAR* Direction : {TEXT("Forward"), TEXT("Backward"), TEXT("Strafe left"), TEXT("Strafe right")})
+        {
+            Label(Direction, 16, FLinearColor::White);
+            auto* Selector = WidgetTree->ConstructWidget<UInputKeySelector>();
+            Selector->SetAllowGamepadKeys(false);
+            Selector->SetAllowModifierKeys(false);
+            Selector->SetEscapeKeys(TArray<FKey>{EKeys::Escape});
+            Column->AddChildToVerticalBox(Selector)->SetPadding(FMargin(0, 4));
+            MovementSelectors.Add(Selector);
+        }
+        Button(TEXT("Fill WASD preset"))->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::UseWASD);
+        Button(TEXT("Fill arrow-key preset"))->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::UseArrowKeys);
+        Button(TEXT("Apply movement keys"))->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ApplyMovementKeys);
+        Button(TEXT("Discard movement draft"))->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::RefreshMovementKeys);
+        MovementFeedback = Label(TEXT("Each direction needs a different keyboard key. Applying replaces existing keyboard movement bindings."), 16, FLinearColor::White);
+        for (const FControlHint& Hint : {FControlHint{TEXT("Turn"), TEXT("Look horizontally")},
             FControlHint{TEXT("LookUp"), TEXT("Look vertically")}})
         {
             FString Keys;
@@ -121,7 +138,7 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
             Label(FString::Printf(TEXT("%s   %s"), Hint.Label, *Keys), 16, FLinearColor::White);
         }
         Label(TEXT("COMBAT & TACTICS"), 20, FLinearColor(0.35f, 0.85f, 0.8f));
-        Label(TEXT("Choose an action, then click its key to rebind. Esc cancels key capture. Movement and menu shortcuts stay fixed."), 16, FLinearColor::White);
+        Label(TEXT("Choose an action, then click its key to rebind. Esc cancels key capture. Menu shortcuts and mouse-look axes stay fixed."), 16, FLinearColor::White);
         BindingAction = WidgetTree->ConstructWidget<UComboBoxString>();
         BindingAction->OnSelectionChanged.AddUniqueDynamic(this, &USPControlsWidget::ChooseBindingAction);
         Column->AddChildToVerticalBox(BindingAction)->SetPadding(FMargin(0, 8));
@@ -136,7 +153,7 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
         ConfirmSwapButton->SetIsEnabled(false);
         ConfirmSwapText = Cast<UTextBlock>(ConfirmSwapButton->GetContent());
         ConfirmSwapButton->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ConfirmPendingSwap);
-        auto* Restore = Button(TEXT("Restore original action bindings"));
+        auto* Restore = Button(TEXT("Restore all original key bindings"));
         Restore->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ResetBindings);
         // Only list implemented player controls. Config-only actions are not advertised.
         for (const FControlHint& Hint : {
@@ -194,6 +211,7 @@ void USPControlsWidget::NativeConstruct()
         if (!GetMutableDefault<USPControlSettings>()->ApplyActionOverrides(BindingError))
             BindingFeedback->SetText(FText::FromString(TEXT("Saved bindings could not be applied. Restore original bindings to recover. ") + BindingError));
         RefreshBindings();
+        RefreshMovementKeys();
     }
 }
 
@@ -226,6 +244,9 @@ FReply USPControlsWidget::NativeOnPreviewKeyDown(const FGeometry& Geometry, cons
     {
         if (BindingKey && BindingKey->GetIsSelectingKey())
             return Super::NativeOnPreviewKeyDown(Geometry, Event); // let the selector cancel capture
+        for (const auto& Selector : MovementSelectors)
+            if (Selector && Selector->GetIsSelectingKey())
+                return Super::NativeOnPreviewKeyDown(Geometry, Event);
         CloseControls();
         return FReply::Handled();
     }
@@ -354,9 +375,10 @@ void USPControlsWidget::ClearPendingSwap()
 void USPControlsWidget::ResetBindings()
 {
     ClearPendingSwap();
-    GetMutableDefault<USPControlSettings>()->ResetActionBindings();
-    BindingFeedback->SetText(FText::FromString(TEXT("Original action bindings restored. Mouse settings unchanged.")));
+    GetMutableDefault<USPControlSettings>()->ResetAllBindings();
+    BindingFeedback->SetText(FText::FromString(TEXT("Original movement and action keys restored. Mouse and HUD preferences unchanged.")));
     RefreshBindings();
+    RefreshMovementKeys();
 }
 
 void USPControlsWidget::SetHUDContrast(bool bEnabled)
@@ -405,4 +427,74 @@ void USPControlsWidget::SetAimSensitivity(float Value)
 void USPControlsWidget::SetToggleAim(bool bEnabled)
 {
     GetMutableDefault<USPControlSettings>()->bToggleAim = bEnabled;
+}
+
+void USPControlsWidget::StageMovementKeys(const TArray<FKey>& Keys)
+{
+    if (Keys.Num() != MovementSelectors.Num()) return;
+    for (int32 Index = 0; Index < Keys.Num(); ++Index)
+        MovementSelectors[Index]->SetSelectedKey(FInputChord(Keys[Index]));
+    MovementFeedback->SetText(FText::FromString(TEXT("Preset staged. Apply movement keys to save it.")));
+}
+
+void USPControlsWidget::UseWASD()
+{
+    StageMovementKeys({EKeys::W, EKeys::S, EKeys::A, EKeys::D});
+}
+void USPControlsWidget::UseArrowKeys()
+{
+    StageMovementKeys({EKeys::Up, EKeys::Down, EKeys::Left, EKeys::Right});
+}
+
+void USPControlsWidget::RefreshMovementKeys()
+{
+    const FName Axes[] = {TEXT("MoveForward"), TEXT("MoveForward"), TEXT("MoveRight"), TEXT("MoveRight")};
+    const float Scales[] = {1.f, -1.f, -1.f, 1.f};
+    const TCHAR* Names[] = {TEXT("Forward"), TEXT("Backward"), TEXT("Left"), TEXT("Right")};
+    FString Summary = TEXT("Active keyboard layout: ");
+    for (int32 Index = 0; Index < MovementSelectors.Num(); ++Index)
+    {
+        FKey FirstKey;
+        FString Keys;
+        for (const auto& Mapping : GetDefault<UInputSettings>()->GetAxisMappings())
+        {
+            if (Mapping.AxisName != Axes[Index] || Mapping.Scale != Scales[Index]
+                || Mapping.Key.IsGamepadKey() || Mapping.Key.IsAnalog() || Mapping.Key.IsMouseButton()
+                || Mapping.Key.IsTouch() || Mapping.Key.IsGesture()) continue;
+            if (!FirstKey.IsValid()) FirstKey = Mapping.Key;
+            if (!Keys.IsEmpty()) Keys += TEXT(" / ");
+            Keys += Mapping.Key.GetDisplayName().ToString();
+        }
+        MovementSelectors[Index]->SetSelectedKey(FInputChord(FirstKey));
+        if (Index > 0) Summary += TEXT(" | ");
+        Summary += FString(Names[Index]) + TEXT(" ") + (Keys.IsEmpty() ? TEXT("Unbound") : Keys);
+    }
+    MovementSummary->SetText(FText::FromString(Summary));
+    MovementFeedback->SetText(FText::FromString(TEXT("Showing current bindings. Edits take effect only after Apply.")));
+}
+
+void USPControlsWidget::ApplyMovementKeys()
+{
+    TArray<FKey> Keys;
+    for (const auto& Selector : MovementSelectors)
+    {
+        const FInputChord Chord = Selector->GetSelectedKey();
+        if (Chord.bShift || Chord.bCtrl || Chord.bAlt || Chord.bCmd)
+        {
+            MovementFeedback->SetText(FText::FromString(TEXT("Choose single keyboard keys without modifier combinations.")));
+            return;
+        }
+        Keys.Add(Chord.Key);
+    }
+    ClearPendingSwap();
+    if (auto* PC = GetOwningPlayer<ASPObserverPlayerController>())
+        if (auto* Character = Cast<ASPCharacter>(PC->GetPawn())) Character->ReleaseHeldControls();
+    FString Error;
+    if (GetMutableDefault<USPControlSettings>()->SetMovementKeys(Keys, Error))
+    {
+        RefreshMovementKeys();
+        RefreshBindings();
+        MovementFeedback->SetText(FText::FromString(TEXT("Movement keys applied and saved.")));
+    }
+    else MovementFeedback->SetText(FText::FromString(Error));
 }
