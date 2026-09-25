@@ -58,7 +58,7 @@ public:
 protected:
     void MoveForward(float V); void MoveRight(float V); void Turn(float V); void LookUp(float V);
     void Fire(); void Reload(); void BeginSilent(); void EndSilent();
-    void BeginAim(); void EndAim(); void BeginSprint(); void EndSprint();
+    void BeginAim(); void EndAim(); void ReleaseAimKey(); void BeginSprint(); void EndSprint();
     void CycleEquipment(); void ThrowEquipment(); void CycleSquadOrder(); void Fortify();
     void BeginLeanLeft(); void EndLeanLeft(); void BeginLeanRight(); void EndLeanRight(); void Vault(); void CycleOptic(); void InspectWeapon();
     void UpdateCoverStateAuthority();

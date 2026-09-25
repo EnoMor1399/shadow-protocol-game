@@ -14,6 +14,7 @@ public:
     UPROPERTY(Config) float AimSensitivityMultiplier = 1.f;
     float GetSafeAimSensitivityMultiplier() const;
     UPROPERTY(Config) bool bInvertMouseY = false;
+    UPROPERTY(Config) bool bToggleAim = false;
     UPROPERTY(Config) bool bHighContrastHUD = false;
     UPROPERTY(Config) bool bShowCrosshair = true;
     UPROPERTY(Config) bool bShowHUDHints = true;

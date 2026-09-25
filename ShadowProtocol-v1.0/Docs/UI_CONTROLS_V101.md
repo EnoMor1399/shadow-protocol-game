@@ -178,3 +178,7 @@ Validation: Node source contracts cover the handler gates and cleanup wiring. UE
 ### Separate aim sensitivity
 
 Added a saved aim sensitivity multiplier (0.10–1.00x normal mouse sensitivity) to controls. Both yaw and pitch use it only while aiming; invert-Y remains applied. Default 1.00 preserves existing behavior. Mouse reset restores normal sensitivity, aim multiplier and invert-Y together; HUD/key resets preserve them. Values loaded from config are clamped and nonfinite values fall back to 1.00. Saves with existing controls close/end-play persistence. UE validation pending: horizontal/vertical aim, release back to normal speed, invert-Y, restart persistence and independent resets. This changes input scaling only, not camera FOV, weapon accuracy or optic zoom.
+
+### Toggle aiming
+
+Added saved toggle aiming (default off). First aim press enters aim, second exits; release exits only in hold mode. Menu and incapacitation cleanup call unconditional EndAim, so toggle cannot retain aim through control loss. Aim still cancels sprint and uses the saved aim-sensitivity multiplier. Mouse reset restores hold aiming; HUD/key resets preserve the preference. UE runtime checks pending: hold/toggle presses and releases, sprint conflict, menu open/close, downing/recovery, saved restart behavior and mouse reset.

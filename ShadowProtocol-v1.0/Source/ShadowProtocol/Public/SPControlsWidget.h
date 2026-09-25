@@ -26,6 +26,8 @@ private:
     UPROPERTY(Transient) TObjectPtr<USlider> AimSensitivitySlider;
     UFUNCTION() void SetAimSensitivity(float Value);
     UPROPERTY(Transient) TObjectPtr<UCheckBox> InvertCheck;
+    UPROPERTY(Transient) TObjectPtr<UCheckBox> ToggleAimCheck;
+    UFUNCTION() void SetToggleAim(bool bEnabled);
     UPROPERTY(Transient) TObjectPtr<UButton> ResumeButton;
     UPROPERTY(Transient) TObjectPtr<UCheckBox> ContrastCheck;
     UPROPERTY(Transient) TObjectPtr<UCheckBox> CrosshairCheck;

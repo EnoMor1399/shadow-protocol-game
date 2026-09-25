@@ -47,7 +47,7 @@ void ASPCharacter::SetupPlayerInputComponent(UInputComponent* IC)
     IC->BindAction("Crouch", IE_Pressed, this, &ASPCharacter::BeginSilent);
     IC->BindAction("Crouch", IE_Released, this, &ASPCharacter::EndSilent);
     IC->BindAction("Aim", IE_Pressed, this, &ASPCharacter::BeginAim);
-    IC->BindAction("Aim", IE_Released, this, &ASPCharacter::EndAim);
+    IC->BindAction("Aim", IE_Released, this, &ASPCharacter::ReleaseAimKey);
     IC->BindAction("Sprint", IE_Pressed, this, &ASPCharacter::BeginSprint);
     IC->BindAction("Sprint", IE_Released, this, &ASPCharacter::EndSprint);
     IC->BindAction("CycleEquipment", IE_Pressed, this, &ASPCharacter::CycleEquipment);
@@ -74,7 +74,8 @@ void ASPCharacter::EndSilent(){ bSilentMovement=false; UnCrouch(); ServerSetSile
 void ASPCharacter::ServerSetSilentMovement_Implementation(bool bEnabled){ bSilentMovement=bEnabled && CanPerformCharacterActions(); if(bEnabled){bSprinting=false;GetCharacterMovement()->MaxWalkSpeed=420.f;} }
 void ASPCharacter::ServerFire_Implementation(float ClientServerTimeSeconds){ if(CanPerformCharacterActions() && EquippedWeapon) EquippedWeapon->ServerTryFire(this,ClientServerTimeSeconds); }
 void ASPCharacter::ServerReload_Implementation(){ if(CanPerformCharacterActions() && EquippedWeapon) EquippedWeapon->ServerReload(); }
-void ASPCharacter::BeginAim(){ if(!CanUseLocalControls()) return; bAiming=true; bSprinting=false; GetCharacterMovement()->MaxWalkSpeed=420.f; ServerSetAiming(true); ServerSetSprinting(false); }
+void ASPCharacter::BeginAim(){ if(!CanUseLocalControls()) return; if(GetDefault<USPControlSettings>()->bToggleAim && bAiming){ EndAim(); return; } bAiming=true; bSprinting=false; GetCharacterMovement()->MaxWalkSpeed=420.f; ServerSetAiming(true); ServerSetSprinting(false); }
+void ASPCharacter::ReleaseAimKey(){ if(!GetDefault<USPControlSettings>()->bToggleAim) EndAim(); }
 void ASPCharacter::EndAim(){ bAiming=false; ServerSetAiming(false); }
 void ASPCharacter::BeginSprint(){ if(!CanUseLocalControls()) return; if(Stamina<=2.f || bSilentMovement || bAiming) return; bSprinting=true; GetCharacterMovement()->MaxWalkSpeed=620.f; ServerSetSprinting(true); }
 void ASPCharacter::EndSprint(){ bSprinting=false; GetCharacterMovement()->MaxWalkSpeed=420.f; ServerSetSprinting(false); }

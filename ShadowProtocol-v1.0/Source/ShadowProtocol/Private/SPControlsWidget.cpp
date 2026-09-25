@@ -76,9 +76,6 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
         InvertCheck->SetContent(InvertLabel);
         InvertCheck->OnCheckStateChanged.AddUniqueDynamic(this, &USPControlsWidget::SetInvert);
         Column->AddChildToVerticalBox(InvertCheck)->SetPadding(FMargin(0, 12));
-        auto* Reset = Button(TEXT("Reset mouse settings"));
-        Reset->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ResetDefaults);
-        Label(TEXT("HUD READABILITY"), 20, FLinearColor(0.35f, 0.85f, 0.8f));
         const auto Check = [&](const TCHAR* Caption)
         {
             auto* Item = WidgetTree->ConstructWidget<UCheckBox>();
@@ -88,6 +85,11 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
             Column->AddChildToVerticalBox(Item)->SetPadding(FMargin(0, 8));
             return Item;
         };
+        ToggleAimCheck = Check(TEXT("Press to toggle aiming"));
+        ToggleAimCheck->OnCheckStateChanged.AddUniqueDynamic(this, &USPControlsWidget::SetToggleAim);
+        auto* Reset = Button(TEXT("Reset mouse settings"));
+        Reset->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ResetDefaults);
+        Label(TEXT("HUD READABILITY"), 20, FLinearColor(0.35f, 0.85f, 0.8f));
         ContrastCheck = Check(TEXT("High-contrast combat HUD"));
         ContrastCheck->OnCheckStateChanged.AddUniqueDynamic(this, &USPControlsWidget::SetHUDContrast);
         CrosshairCheck = Check(TEXT("Show crosshair"));
@@ -138,7 +140,7 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
         Restore->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ResetBindings);
         // Only list implemented player controls. Config-only actions are not advertised.
         for (const FControlHint& Hint : {
-            FControlHint{TEXT("Fire"), TEXT("Fire (single press)")}, FControlHint{TEXT("Aim"), TEXT("Aim (hold)")},
+            FControlHint{TEXT("Fire"), TEXT("Fire (single press)")}, FControlHint{TEXT("Aim"), TEXT("Aim (hold or toggle)")},
             FControlHint{TEXT("Reload"), TEXT("Reload")}, FControlHint{TEXT("Crouch"), TEXT("Crouch / silent movement (hold)")},
             FControlHint{TEXT("Sprint"), TEXT("Sprint (hold)")}, FControlHint{TEXT("LeanLeft"), TEXT("Lean left (hold)")},
             FControlHint{TEXT("LeanRight"), TEXT("Lean right (hold)")}, FControlHint{TEXT("Vault"), TEXT("Vault low obstacle")},
@@ -162,7 +164,7 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
             BindingAction->AddOption(Hint.Label);
             BindingLabels.Add(FName(Hint.Mapping), Label(FString::Printf(TEXT("%s   %s"), Hint.Label, Keys.IsEmpty() ? TEXT("Unbound") : *Keys), 16, FLinearColor::White));
         }
-        Label(TEXT("Aim, crouch, sprint and lean are hold controls. Release and press again after closing a menu."), 16, FLinearColor::White);
+        Label(TEXT("Crouch, sprint and lean are hold controls. Aim uses your hold/toggle preference. Release and press again after closing a menu."), 16, FLinearColor::White);
         BindingAction->SetSelectedIndex(0);
         WidgetTree->RootWidget = Backdrop;
     }
@@ -175,6 +177,7 @@ void USPControlsWidget::NativeConstruct()
     const auto* HUDSettings = GetDefault<USPControlSettings>();
     AimSensitivitySlider->SetValue(HUDSettings->GetSafeAimSensitivityMultiplier());
     SetAimSensitivity(HUDSettings->GetSafeAimSensitivityMultiplier());
+    ToggleAimCheck->SetIsChecked(HUDSettings->bToggleAim);
     ContrastCheck->SetIsChecked(HUDSettings->bHighContrastHUD);
     CrosshairCheck->SetIsChecked(HUDSettings->bShowCrosshair);
     HintsCheck->SetIsChecked(HUDSettings->bShowHUDHints);
@@ -207,6 +210,8 @@ void USPControlsWidget::ResetDefaults()
 {
     SensitivitySlider->SetValue(1.f); InvertCheck->SetIsChecked(false);
     SetSensitivity(1.f); SetInvert(false);
+    ToggleAimCheck->SetIsChecked(false);
+    SetToggleAim(false);
     AimSensitivitySlider->SetValue(1.f);
     SetAimSensitivity(1.f);
 }
@@ -395,4 +400,9 @@ void USPControlsWidget::SetAimSensitivity(float Value)
     Settings->AimSensitivityMultiplier = Settings->GetSafeAimSensitivityMultiplier();
     if (AimSensitivityLabel) AimSensitivityLabel->SetText(FText::FromString(FString::Printf(
         TEXT("Aim sensitivity   %.2fx normal"), Settings->AimSensitivityMultiplier)));
+}
+
+void USPControlsWidget::SetToggleAim(bool bEnabled)
+{
+    GetMutableDefault<USPControlSettings>()->bToggleAim = bEnabled;
 }
