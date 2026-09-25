@@ -49,7 +49,7 @@ public:
     UFUNCTION(Server, Reliable) void ServerSetSprinting(bool bEnabled);
     UFUNCTION(Server, Reliable) void ServerCycleSquadOrder();
     UFUNCTION(Server, Reliable) void ServerFortify();
-    UFUNCTION(Server, Unreliable) void ServerSetLean(float Value);
+    UFUNCTION(Server, Reliable) void ServerSetLean(float Value);
     UFUNCTION(Server, Reliable) void ServerVault();
     UFUNCTION(Server, Reliable) void ServerCycleOptic();
     UFUNCTION(BlueprintImplementableEvent, Category="Weapon") void BP_InspectWeapon();
@@ -63,6 +63,8 @@ protected:
     void BeginLeanLeft(); void EndLeanLeft(); void BeginLeanRight(); void EndLeanRight(); void Vault(); void CycleOptic(); void InspectWeapon();
     void UpdateCoverStateAuthority();
     bool CanUseLocalControls() const;
+    bool CanPerformCharacterActions() const;
+    bool bLocalControlsWereUsable = false;
     FSPHeldLeanState HeldLean;
     void UpdateHeldLean();
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;

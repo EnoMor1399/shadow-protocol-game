@@ -168,3 +168,9 @@ The scoreboard action now supports saved keyboard/mouse rebinding and confirmed 
 ### Scoreboard toggle preference
 
 Added a saved press-to-toggle scoreboard option in HUD preferences. Hold remains the default. Both help prompts use the selected mode and live binding. Key release closes only hold mode; a second press closes toggle mode. Opening the controls or ready-room modal clears either mode. HUD reset restores hold without resetting action bindings. The final roster remains visible at match completion. UE runtime validation pending: both modes, remapped keys, menu transitions, saved preference after restart, HUD reset and match completion.
+
+### Incapacitated character controls
+
+Character action RPCs now recheck alive/not-downed state for firing, reload, aim, sprint, silent movement, lean, vault, optic changes, squad orders and fortification. Release requests remain accepted. Authority clears aim/sprint/silent/lean and cover peek while incapacitated; the local control transition releases held inputs once instead of sending releases every frame. Lean input is a reliable press/release RPC and rejects nonfinite values.
+
+Validation: Node source contracts cover the handler gates and cleanup wiring. UE5.6 compilation and runtime testing remain pending. Test downing/elimination while holding each action, delayed press packets after downing, recovery requiring fresh presses, menu transitions, and lean release under packet loss. This change covers character input handlers; it is not a complete audit of independently callable weapon/equipment/cover component RPCs or server movement validation.

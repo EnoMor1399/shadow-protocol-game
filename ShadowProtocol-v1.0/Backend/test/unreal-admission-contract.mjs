@@ -331,3 +331,21 @@ test('scoreboard is local, read-only and releases when a modal opens', async () 
   for (const field of ['PlayerSlots', 'SlotIndex', 'Eliminations', 'Deaths', 'Assists', 'TacticalScore', 'Reconnecting']) assert.ok(board.includes(field));
   assert.doesNotMatch(board, /AuthenticatedUserId|AuthenticatedSessionId|GetActorLocation|Server\w+\(/);
 });
+
+
+test('character controls reject incapacitated actions and clear held state', async () => {
+  const cpp = await source('../../Source/ShadowProtocol/Private/SPCharacter.cpp');
+  const header = await source('../../Source/ShadowProtocol/Public/SPCharacter.h');
+  assert.match(cpp, /return Health && Health->IsAlive\(\) && !Health->bDowned/);
+  for (const name of ['ServerFire', 'ServerReload', 'ServerSetSilentMovement', 'ServerSetAiming',
+    'ServerSetSprinting', 'ServerSetLean', 'ServerVault', 'ServerCycleOptic', 'ServerCycleSquadOrder', 'ServerFortify']) {
+    const body = cpp.split(`void ASPCharacter::${name}_Implementation`)[1]?.split('\nvoid ASPCharacter::')[0];
+    assert.ok(body?.includes('CanPerformCharacterActions()'), `${name} must check health on the server`);
+  }
+  assert.match(header, /UFUNCTION\(Server, Reliable\) void ServerSetLean/);
+  assert.match(cpp, /FMath::IsFinite\(Value\)/);
+  assert.match(cpp, /bLocalControlsWereUsable && !bControlsUsable\) ReleaseHeldControls\(\)/);
+  const tick = cpp.split('void ASPCharacter::Tick')[1].split('void ASPCharacter::GetLifetimeReplicatedProps')[0];
+  for (const reset of ['bAiming = false', 'bSprinting = false', 'bSilentMovement = false', 'LeanAlpha = 0.f'])
+    assert.ok(tick.includes(reset), `authority must clear ${reset}`);
+});
