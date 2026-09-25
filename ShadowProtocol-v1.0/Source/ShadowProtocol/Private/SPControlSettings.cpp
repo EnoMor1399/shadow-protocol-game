@@ -176,3 +176,8 @@ FString USPControlSettings::GetActionKeyLabel(FName Action)
     }
     return Label.IsEmpty() ? TEXT("Unbound") : Label;
 }
+
+float USPControlSettings::GetSafeAimSensitivityMultiplier() const
+{
+    return FMath::IsFinite(AimSensitivityMultiplier) ? FMath::Clamp(AimSensitivityMultiplier, 0.1f, 1.f) : 1.f;
+}

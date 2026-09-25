@@ -1,5 +1,6 @@
 #include "Camera/CameraComponent.h"
 #include "SPObserverPlayerController.h"
+#include "SPControlSettings.h"
 #include "Components/InputComponent.h"
 #include "SPCharacter.h"
 #include "SPHealthComponent.h"
@@ -64,8 +65,8 @@ void ASPCharacter::SetupPlayerInputComponent(UInputComponent* IC)
 
 void ASPCharacter::MoveForward(float V){ if(CanUseLocalControls() && V!=0.f) AddMovementInput(GetActorForwardVector(),V * (Health?Health->LegSpeedMultiplier:1.f)); }
 void ASPCharacter::MoveRight(float V){ if(CanUseLocalControls() && V!=0.f) AddMovementInput(GetActorRightVector(),V * (Health?Health->LegSpeedMultiplier:1.f)); }
-void ASPCharacter::Turn(float V){ if(!CanUseLocalControls()) return; const auto* PC=Cast<ASPObserverPlayerController>(GetController()); AddControllerYawInput(V*(PC?PC->GetMouseSensitivity():1.f)); }
-void ASPCharacter::LookUp(float V){ if(!CanUseLocalControls()) return; const auto* PC=Cast<ASPObserverPlayerController>(GetController()); AddControllerPitchInput(V*(PC?PC->GetMouseSensitivity():1.f)*(PC && PC->IsMouseYInverted()?-1.f:1.f)); }
+void ASPCharacter::Turn(float V){ if(!CanUseLocalControls()) return; const auto* PC=Cast<ASPObserverPlayerController>(GetController()); AddControllerYawInput(V*(PC?PC->GetMouseSensitivity():1.f)*(bAiming?GetDefault<USPControlSettings>()->GetSafeAimSensitivityMultiplier():1.f)); }
+void ASPCharacter::LookUp(float V){ if(!CanUseLocalControls()) return; const auto* PC=Cast<ASPObserverPlayerController>(GetController()); AddControllerPitchInput(V*(PC?PC->GetMouseSensitivity():1.f)*(bAiming?GetDefault<USPControlSettings>()->GetSafeAimSensitivityMultiplier():1.f)*(PC && PC->IsMouseYInverted()?-1.f:1.f)); }
 void ASPCharacter::Fire(){ if(!CanUseLocalControls()) return; const AGameStateBase* GS=GetWorld()?GetWorld()->GetGameState():nullptr; const float ShotTime=GS?GS->GetServerWorldTimeSeconds():(GetWorld()?GetWorld()->GetTimeSeconds():0.f); ServerFire(ShotTime); }
 void ASPCharacter::Reload(){ if(!CanUseLocalControls()) return; ServerReload(); }
 void ASPCharacter::BeginSilent(){ if(!CanUseLocalControls()) return; EndSprint(); bSilentMovement=true; Crouch(); ServerSetSilentMovement(true); }

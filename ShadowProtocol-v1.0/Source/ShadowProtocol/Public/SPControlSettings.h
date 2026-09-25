@@ -11,6 +11,8 @@ class SHADOWPROTOCOL_API USPControlSettings : public UObject
     GENERATED_BODY()
 public:
     UPROPERTY(Config) float MouseSensitivity = 1.f;
+    UPROPERTY(Config) float AimSensitivityMultiplier = 1.f;
+    float GetSafeAimSensitivityMultiplier() const;
     UPROPERTY(Config) bool bInvertMouseY = false;
     UPROPERTY(Config) bool bHighContrastHUD = false;
     UPROPERTY(Config) bool bShowCrosshair = true;

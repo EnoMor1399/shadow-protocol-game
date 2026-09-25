@@ -63,6 +63,13 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
         SensitivitySlider->SetStepSize(0.05f);
         SensitivitySlider->OnValueChanged.AddUniqueDynamic(this, &USPControlsWidget::SetSensitivity);
         Column->AddChildToVerticalBox(SensitivitySlider);
+        AimSensitivityLabel = Label(TEXT("Aim sensitivity"), 18, FLinearColor::White);
+        AimSensitivitySlider = WidgetTree->ConstructWidget<USlider>();
+        AimSensitivitySlider->SetMinValue(0.1f); AimSensitivitySlider->SetMaxValue(1.f);
+        AimSensitivitySlider->SetStepSize(0.05f);
+        AimSensitivitySlider->OnValueChanged.AddUniqueDynamic(this, &USPControlsWidget::SetAimSensitivity);
+        Column->AddChildToVerticalBox(AimSensitivitySlider);
+        Label(TEXT("Aim sensitivity scales both mouse axes while aiming. 1.00x keeps your normal sensitivity."), 16, FLinearColor::White);
         InvertCheck = WidgetTree->ConstructWidget<UCheckBox>();
         auto* InvertLabel = WidgetTree->ConstructWidget<UTextBlock>();
         InvertLabel->SetText(FText::FromString(TEXT("Invert vertical mouse look")));
@@ -166,6 +173,8 @@ void USPControlsWidget::NativeConstruct()
 {
     Super::NativeConstruct();
     const auto* HUDSettings = GetDefault<USPControlSettings>();
+    AimSensitivitySlider->SetValue(HUDSettings->GetSafeAimSensitivityMultiplier());
+    SetAimSensitivity(HUDSettings->GetSafeAimSensitivityMultiplier());
     ContrastCheck->SetIsChecked(HUDSettings->bHighContrastHUD);
     CrosshairCheck->SetIsChecked(HUDSettings->bShowCrosshair);
     HintsCheck->SetIsChecked(HUDSettings->bShowHUDHints);
@@ -198,6 +207,8 @@ void USPControlsWidget::ResetDefaults()
 {
     SensitivitySlider->SetValue(1.f); InvertCheck->SetIsChecked(false);
     SetSensitivity(1.f); SetInvert(false);
+    AimSensitivitySlider->SetValue(1.f);
+    SetAimSensitivity(1.f);
 }
 void USPControlsWidget::CloseControls()
 {
@@ -375,4 +386,13 @@ void USPControlsWidget::ResetHUDPreferences()
 void USPControlsWidget::SetScoreboardToggle(bool bEnabled)
 {
     GetMutableDefault<USPControlSettings>()->bToggleScoreboard = bEnabled;
+}
+
+void USPControlsWidget::SetAimSensitivity(float Value)
+{
+    auto* Settings = GetMutableDefault<USPControlSettings>();
+    Settings->AimSensitivityMultiplier = Value;
+    Settings->AimSensitivityMultiplier = Settings->GetSafeAimSensitivityMultiplier();
+    if (AimSensitivityLabel) AimSensitivityLabel->SetText(FText::FromString(FString::Printf(
+        TEXT("Aim sensitivity   %.2fx normal"), Settings->AimSensitivityMultiplier)));
 }

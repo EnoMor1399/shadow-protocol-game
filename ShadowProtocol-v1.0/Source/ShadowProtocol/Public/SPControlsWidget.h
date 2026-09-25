@@ -22,6 +22,9 @@ protected:
 private:
     UPROPERTY(Transient) TObjectPtr<UTextBlock> SensitivityLabel;
     UPROPERTY(Transient) TObjectPtr<USlider> SensitivitySlider;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> AimSensitivityLabel;
+    UPROPERTY(Transient) TObjectPtr<USlider> AimSensitivitySlider;
+    UFUNCTION() void SetAimSensitivity(float Value);
     UPROPERTY(Transient) TObjectPtr<UCheckBox> InvertCheck;
     UPROPERTY(Transient) TObjectPtr<UButton> ResumeButton;
     UPROPERTY(Transient) TObjectPtr<UCheckBox> ContrastCheck;
