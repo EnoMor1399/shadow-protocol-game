@@ -284,3 +284,18 @@ The migration `Backend/db/v101_match_assembly.sql` adds match assembly state, ta
 ### Dedicated-server match isolation
 
 A registered Unreal dedicated-server process is now reserved to **one active match at a time**. Starting a new match requires an otherwise healthy node with `active_allocations=0`. Once a match has claimed that node, only additional allocations joining that same assembling match may consume its remaining player capacity. This prevents separate ranked/unranked matches from being routed to one UE process simultaneously.
+
+
+### Trusted platform identity bootstrap
+
+Production client authentication now has a replay-protected platform assertion
+exchange. A trusted identity gateway verifies Steam/EOS/other provider identity,
+then issues a short-lived assertion; Unreal exchanges that assertion through
+`USPBackendSessionSubsystem::ExchangePlatformIdentityAssertion` for the normal
+backend game-session token. No session bootstrap secret or platform assertion
+signing key is embedded in the client.
+
+`v101_platform_identity.sql` adds stable provider-subject-to-user mapping and
+single-use assertion audit state. Production defaults the legacy raw-user bootstrap
+route off. Provider SDK/ticket verification itself remains gateway work, not a
+claim of this source-only patch. See `Docs/PLATFORM_IDENTITY_V101.md`.

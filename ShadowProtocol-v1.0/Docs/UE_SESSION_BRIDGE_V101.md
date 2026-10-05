@@ -270,3 +270,23 @@ First-time admission in `ASPProtocolGameMode` validates the slot range and accep
 The current v1.0.1 solo assembly uses deterministic fixed sides: slots 0–4 are Directorate Nine / attack and slots 5–9 are Helix / defense. Party-preserving and skill-balanced team construction remain later matchmaking work; they must not be inferred as already implemented.
 
 Expired, unconsumed pre-admission reservations are removed from the pre-match roster, allowing a replacement allocation to reclaim the exact vacant slot without shifting existing players.
+
+
+## Trusted platform identity bootstrap
+
+The client session bridge now has a production-safe initial session path:
+`ExchangePlatformIdentityAssertion(IdentityAssertion, DeviceNonce)`.
+
+The assertion is produced only after a trusted identity gateway verifies the
+platform account. Unreal does not know `SESSION_BOOTSTRAP_SECRET` or
+`PLATFORM_IDENTITY_ASSERTION_SECRET`. It posts the one-time assertion to
+`/v1/auth/platform-session`, validates the returned authority/expiry and installs
+the resulting backend session in memory.
+
+The request is independently correlated and cancelable so a late response from an
+older sign-in attempt cannot replace a newer identity. Successful exchange emits
+`OnAuthenticatedSessionEstablished` with session id, backend user id, provider,
+region and expiry; the bearer token itself remains private.
+
+See `PLATFORM_IDENTITY_V101.md`. Direct Steam/EOS provider verification still
+belongs in the trusted identity gateway and has not been runtime-integrated here.

@@ -344,3 +344,23 @@ Confirmed swaps now require exactly one unmodified keyboard/mouse binding per ac
 - Restore all original key bindings resets action and movement overrides together while preserving mouse/aim/HUD preferences.
 - Extend Escape capture cancellation to movement selectors and add Unreal movement automation with non-persistent setup/cleanup.
 - Consolidate stale UI/control documentation. Local source contracts cover wiring; UE5.6 build, automation and packaged-client input/render checks remain pending.
+
+
+### Trusted platform identity bootstrap
+
+- Add `v101_platform_identity.sql` with hashed provider-subject mappings and
+  replay-audited platform identity assertions.
+- Add `POST /v1/auth/platform-session` for short-lived HMAC-signed identity
+  gateway assertions bound to provider, subject, region and network build.
+- Consume each assertion `jti` once; reject replay, incompatible builds and
+  inactive accounts.
+- Resolve fresh assertions for the same provider subject to one stable backend
+  `users.id`; do not persist the raw provider subject.
+- Default the legacy `/v1/auth/game-session` bootstrap route off in production,
+  with an explicit migration-only enable switch.
+- Convert PostgreSQL matchmaking/admission/reconnect integration coverage to the
+  platform-session path.
+- Add Unreal `ExchangePlatformIdentityAssertion`, stale-response cancellation,
+  in-memory backend identity metadata and `OnAuthenticatedSessionEstablished`.
+- Keep provider ticket verification outside the shipped client; Steam/EOS gateway
+  adapters and real provider sandbox tests remain pending.

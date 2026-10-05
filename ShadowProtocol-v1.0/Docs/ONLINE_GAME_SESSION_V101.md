@@ -67,9 +67,9 @@ Validate with packaged clients and a server, not only single-process PIE:
 
 ## Remaining integration boundaries
 
-Steam/EOS account verification, trusted backend session bootstrap, provider-specific
-client `JoinSession`/discovery and UMG ready/reconnect wiring are not implemented by
-this patch. Current sessions are NULL/IP, allocated by the backend. Complete the
+Steam/EOS account verification and provider-specific client `JoinSession`/discovery are not implemented by
+this patch. The trusted backend session-bootstrap handoff is now implemented through
+short-lived identity-gateway assertions; provider SDK/ticket verification remains gateway work. Current sessions are NULL/IP, allocated by the backend. Complete the
 UHT, packaged travel and real 10-client soak gates before claiming runtime sign-off.
 
 Reference: [Epic's Session Interface](https://dev.epicgames.com/documentation/en-us/unreal-engine/online-subsystem-session-interface-in-unreal-engine).
