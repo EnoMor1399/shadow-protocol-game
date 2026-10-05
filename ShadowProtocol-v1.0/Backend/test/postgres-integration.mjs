@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { spawn } from 'node:child_process';
 import pg from 'pg';
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 
 const { Client } = pg;
 const PORT = 18082;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const DATABASE_URL = process.env.DATABASE_URL;
-const BOOTSTRAP_SECRET = 'ci-postgres-bootstrap-secret';
+const PLATFORM_IDENTITY_ASSERTION_SECRET = 'ci-postgres-platform-identity-secret';
 const SERVER_REGISTRATION_SECRET = 'ci-postgres-registration-secret';
 const ORCHESTRATOR_ATTESTATION_SECRET = 'ci-postgres-orchestrator-attestation-secret';
 const PRIMARY_SERVER_ID = 'ACC-PRIMARY';
@@ -62,16 +62,47 @@ async function bootstrapPost(path, body, attestation = '') {
 async function nodePost(path, body, serverId, nodeCredential) {
   return fetch(`${BASE_URL}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-sp-server-id': serverId, 'x-sp-node-credential': nodeCredential }, body: JSON.stringify(body) });
 }
-async function createPlayerSession(userId, email, region, nonce) {
+function issuePlatformIdentityAssertion(subject, region='acc', build='SP-1.0.1', overrides={}) {
+  const iat=Date.now();
+  const claims={
+    jti:randomUUID(),
+    iss:'shadow-protocol-identity-gateway',
+    aud:'shadow-protocol-game-session',
+    iat,
+    exp:iat+60_000,
+    provider:'ci',
+    subject,
+    region,
+    build,
+    ...overrides
+  };
+  const encoded=Buffer.from(JSON.stringify(claims)).toString('base64url');
+  const signature=createHmac('sha256',PLATFORM_IDENTITY_ASSERTION_SECRET).update(encoded).digest('base64url');
+  return `${encoded}.${signature}`;
+}
+async function bindPlatformIdentity(userId,email,subject) {
   await db.query(`insert into users(id,email,status,trust_score) values($1,$2,'active',88)
     on conflict(id) do update set email=excluded.email,status='active',trust_score=88`,[userId,email]);
-  const response=await fetch(`${BASE_URL}/v1/auth/game-session`,{
+  const subjectHash=createHash('sha256').update(`ci:${subject}`).digest('hex');
+  await db.query(`insert into platform_identities(provider,provider_subject_hash,user_id,last_seen_at)
+    values('ci',$1,$2,now())
+    on conflict(provider,provider_subject_hash) do update set user_id=excluded.user_id,last_seen_at=now()`,[subjectHash,userId]);
+}
+async function createPlayerSession(userId, email, region, nonce) {
+  const subject=`user-${userId}`;
+  await bindPlatformIdentity(userId,email,subject);
+  const assertion=issuePlatformIdentityAssertion(subject,region);
+  const response=await fetch(`${BASE_URL}/v1/auth/platform-session`,{
     method:'POST',
-    headers:{'content-type':'application/json','x-session-bootstrap-secret':BOOTSTRAP_SECRET},
-    body:JSON.stringify({userId,region,build:'SP-1.0.1',deviceNonce:nonce})
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({assertion,deviceNonce:nonce})
   });
   assert.equal(response.status,201);
-  return response.json();
+  const session=await response.json();
+  assert.equal(session.userId,userId);
+  assert.equal(session.provider,'ci');
+  assert.equal(session.authority,'platform-identity-assertion');
+  return session;
 }
 
 before(async () => {
@@ -93,7 +124,9 @@ before(async () => {
       PORT: String(PORT),
       REDIS_URL: '',
       SESSION_SIGNING_SECRET: 'ci-postgres-session-signing-secret',
-      SESSION_BOOTSTRAP_SECRET: BOOTSTRAP_SECRET,
+      ENABLE_LEGACY_SESSION_BOOTSTRAP: 'false',
+      PLATFORM_IDENTITY_ASSERTION_SECRET,
+      PLATFORM_IDENTITY_ASSERTION_MAX_TTL_MS: '120000',
       SERVER_REGISTRATION_SECRET,
       ORCHESTRATOR_ATTESTATION_SECRET,
       REQUIRE_SERVER_ATTESTATION: 'true',
@@ -120,6 +153,65 @@ before(async () => {
 after(async () => {
   if (serverProcess && !serverProcess.killed) serverProcess.kill('SIGTERM');
   if (db) await db.end();
+});
+
+test('exchanges single-use platform identity assertions into stable backend sessions', async () => {
+  const subject='platform-integration-primary';
+  const firstAssertion=issuePlatformIdentityAssertion(subject);
+
+  const firstResponse=await fetch(`${BASE_URL}/v1/auth/platform-session`,{
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({assertion:firstAssertion,deviceNonce:'platform-integration-device-1'})
+  });
+  assert.equal(firstResponse.status,201);
+  const first=await firstResponse.json();
+  assert.ok(first.sessionId);
+  assert.ok(first.sessionToken);
+  assert.ok(first.userId);
+  assert.equal(first.provider,'ci');
+  assert.equal(first.region,'acc');
+  assert.equal(first.authority,'platform-identity-assertion');
+
+  const replay=await fetch(`${BASE_URL}/v1/auth/platform-session`,{
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({assertion:firstAssertion,deviceNonce:'platform-integration-device-2'})
+  });
+  assert.equal(replay.status,409);
+  assert.equal((await replay.json()).error,'platform-identity-assertion-replayed');
+
+  const secondAssertion=issuePlatformIdentityAssertion(subject);
+  const secondResponse=await fetch(`${BASE_URL}/v1/auth/platform-session`,{
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({assertion:secondAssertion,deviceNonce:'platform-integration-device-3'})
+  });
+  assert.equal(secondResponse.status,201);
+  const second=await secondResponse.json();
+  assert.equal(second.userId,first.userId);
+
+  const badBuildAssertion=issuePlatformIdentityAssertion('platform-bad-build','acc','SP-0.9.0');
+  const badBuild=await fetch(`${BASE_URL}/v1/auth/platform-session`,{
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({assertion:badBuildAssertion,deviceNonce:'platform-integration-device-4'})
+  });
+  assert.equal(badBuild.status,426);
+
+  const tampered=secondAssertion.slice(0,-1)+(secondAssertion.endsWith('A')?'B':'A');
+  const tamperedResponse=await fetch(`${BASE_URL}/v1/auth/platform-session`,{
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({assertion:tampered,deviceNonce:'platform-integration-device-5'})
+  });
+  assert.equal(tamperedResponse.status,401);
+
+  const identityRows=await db.query(`select provider,user_id from platform_identities where provider='ci' and user_id=$1`,[first.userId]);
+  assert.equal(identityRows.rowCount,1);
+  const sessions=await db.query(`select auth_provider,identity_assertion_id from game_sessions where user_id=$1 order by created_at`,[first.userId]);
+  assert.ok(sessions.rowCount>=2);
+  assert.ok(sessions.rows.every(row=>row.auth_provider==='ci'&&row.identity_assertion_id));
 });
 
 test('schedules healthy regional nodes and preserves admission, ready, reconnect and release authority', async () => {
@@ -193,21 +285,12 @@ test('schedules healthy regional nodes and preserves admission, ready, reconnect
   assert.ok(staleNode.nodeCredential.length >= 32);
   await db.query(`update game_server_nodes set last_heartbeat_at=now()-interval '2 minutes' where server_id='ACC-STALE'`);
 
-  const sessionResponse = await fetch(`${BASE_URL}/v1/auth/game-session`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-session-bootstrap-secret': BOOTSTRAP_SECRET
-    },
-    body: JSON.stringify({
-      userId: TEST_USER_ID,
-      region: 'acc',
-      build: 'SP-1.0.1',
-      deviceNonce: 'postgres-integration-device-nonce'
-    })
-  });
-  assert.equal(sessionResponse.status, 201);
-  const session = await sessionResponse.json();
+  const session = await createPlayerSession(
+    TEST_USER_ID,
+    TEST_EMAIL,
+    'acc',
+    'postgres-integration-device-nonce'
+  );
   const playerHeaders = {
     'content-type': 'application/json',
     authorization: `Bearer ${session.sessionToken}`

@@ -62,10 +62,22 @@ const compatibilityPayload = () => ({
 
 const SESSION_SECRET = process.env.SESSION_SIGNING_SECRET ?? 'dev-only-change-me';
 const SESSION_BOOTSTRAP_SECRET = process.env.SESSION_BOOTSTRAP_SECRET ?? 'dev-bootstrap-change-me';
+const ENABLE_LEGACY_SESSION_BOOTSTRAP = (process.env.ENABLE_LEGACY_SESSION_BOOTSTRAP ?? (IS_PRODUCTION ? 'false' : 'true')).trim().toLowerCase() === 'true';
+const PLATFORM_IDENTITY_ASSERTION_SECRET = (process.env.PLATFORM_IDENTITY_ASSERTION_SECRET ?? '').trim();
+const platformAssertionTtlCandidate = Number(process.env.PLATFORM_IDENTITY_ASSERTION_MAX_TTL_MS ?? 120_000);
+const PLATFORM_IDENTITY_ASSERTION_MAX_TTL_MS = Number.isFinite(platformAssertionTtlCandidate)
+  ? Math.min(300_000, Math.max(30_000, Math.trunc(platformAssertionTtlCandidate)))
+  : 120_000;
+const PLATFORM_IDENTITY_ASSERTION_CLOCK_SKEW_MS = 15_000;
+const PLATFORM_IDENTITY_ISSUER = 'shadow-protocol-identity-gateway';
+const PLATFORM_IDENTITY_AUDIENCE = 'shadow-protocol-game-session';
 const SERVER_REGISTRATION_SECRET = process.env.SERVER_REGISTRATION_SECRET ?? process.env.MATCH_SERVER_SECRET ?? 'dev-match-secret';
 const b64url=(value:string|Buffer)=>Buffer.from(value).toString('base64url');
 const sha256=(value:string)=>createHash('sha256').update(value).digest('hex');
 type SessionPayload={sid:string;uid:string;exp:number;region:string;build:string;protocol:string};
+type PlatformIdentityAssertionPayload={
+  jti:string;iss:string;aud:string;iat:number;exp:number;provider:string;subject:string;region:string;build:string;
+};
 type ServerAttestationPayload={
   jti:string;iss:string;aud:string;iat:number;exp:number;serverId:string;region:string;networkBuild:string;
   publicHost:string;publicPort:number;capacity:number;
@@ -87,6 +99,29 @@ function verifySession(token:string){
     const payload=JSON.parse(Buffer.from(encoded,'base64url').toString('utf8')) as SessionPayload;
     if(payload.exp<Date.now()||!payload.sid||!payload.uid||!payload.region||!payload.build||!payload.protocol)return null;
     return payload;
+  }catch{return null}
+}
+const platformIdentityAssertionSchema=z.object({
+  jti:z.string().uuid(),iss:z.literal(PLATFORM_IDENTITY_ISSUER),aud:z.literal(PLATFORM_IDENTITY_AUDIENCE),
+  iat:z.number().int().positive(),exp:z.number().int().positive(),
+  provider:z.string().min(2).max(32).regex(/^[a-z0-9][a-z0-9._-]*$/),
+  subject:z.string().min(1).max(256),region:z.string().min(2).max(16),build:z.string().min(2).max(32)
+});
+function verifyPlatformIdentityAssertion(token:string):PlatformIdentityAssertionPayload|null{
+  if(!token||!PLATFORM_IDENTITY_ASSERTION_SECRET)return null;
+  const [encoded,sig]=token.split('.');if(!encoded||!sig)return null;
+  const expected=createHmac('sha256',PLATFORM_IDENTITY_ASSERTION_SECRET).update(encoded).digest();
+  let supplied:Buffer;try{supplied=Buffer.from(sig,'base64url')}catch{return null}
+  if(expected.length!==supplied.length||!timingSafeEqual(expected,supplied))return null;
+  try{
+    const raw=JSON.parse(Buffer.from(encoded,'base64url').toString('utf8'));
+    const parsed=platformIdentityAssertionSchema.safeParse(raw);if(!parsed.success)return null;
+    const claims=parsed.data,now=Date.now();
+    if(claims.iat>now+PLATFORM_IDENTITY_ASSERTION_CLOCK_SKEW_MS)return null;
+    if(claims.exp<=now-PLATFORM_IDENTITY_ASSERTION_CLOCK_SKEW_MS)return null;
+    if(claims.exp<=claims.iat||claims.exp-claims.iat>PLATFORM_IDENTITY_ASSERTION_MAX_TTL_MS)return null;
+    if(claims.iat<now-PLATFORM_IDENTITY_ASSERTION_MAX_TTL_MS-PLATFORM_IDENTITY_ASSERTION_CLOCK_SKEW_MS)return null;
+    return claims;
   }catch{return null}
 }
 function bearer(req:any){const h=String(req.headers?.authorization??'');return h.startsWith('Bearer ')?h.slice(7):''}
@@ -254,6 +289,9 @@ async function reserveSpecificRegisteredServer(client:any,nodeId:string):Promise
 
 app.get('/health', async () => ({
   service: 'shadow-protocol-backend', ok: true, version: BACKEND_PROTOCOL_VERSION,
+  identity: { legacyBootstrapEnabled:ENABLE_LEGACY_SESSION_BOOTSTRAP,
+    platformAssertionConfigured:Boolean(PLATFORM_IDENTITY_ASSERTION_SECRET),
+    platformAssertionMaxTtlMs:PLATFORM_IDENTITY_ASSERTION_MAX_TTL_MS },
   serverRegistry: { enabled:Boolean(pool), heartbeatTtlMs:SERVER_HEARTBEAT_TTL_MS, productionRequiresHealthyNode:IS_PRODUCTION,
     nodeCredentialTtlMs:NODE_CREDENTIAL_TTL_MS,nodeCredentialGraceMs:NODE_CREDENTIAL_GRACE_MS,
     attestationRequired:REQUIRE_SERVER_ATTESTATION,attestationVerifierConfigured:Boolean(ORCHESTRATOR_ATTESTATION_SECRET),
@@ -380,15 +418,71 @@ app.post('/v1/servers/release-allocation',async(req,reply)=>{
 
 const gameSessionSchema=z.object({userId:z.string().uuid(),region:z.string().min(2).max(16),build:z.string().min(2).max(32),deviceNonce:z.string().min(8).max(128)});
 app.post('/v1/auth/game-session',async(req,reply)=>{
-  // Production identity provider / platform auth calls this bootstrap endpoint. A raw userId from a game client is not sufficient identity proof.
+  // Migration-only trusted gateway path. Production defaults this route off.
+  if(!ENABLE_LEGACY_SESSION_BOOTSTRAP)return reply.code(404).send({error:'legacy-session-bootstrap-disabled'});
   if(String(req.headers['x-session-bootstrap-secret']??'')!==SESSION_BOOTSTRAP_SECRET)return reply.code(401).send({error:'bootstrap-auth-required'});
   const parsed=gameSessionSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
   if(!isBuildCompatible(parsed.data.build))return incompatibleBuild(reply,parsed.data.build);
   const sessionId=crypto.randomUUID(),expiresAt=Date.now()+SESSION_TTL_MS;
   const token=signSession({sid:sessionId,uid:parsed.data.userId,region:parsed.data.region,build:parsed.data.build,protocol:BACKEND_PROTOCOL_VERSION,exp:expiresAt});
-  if(pool)await pool.query(`insert into game_sessions(id,user_id,region,build,device_nonce_hash,expires_at) values($1,$2,$3,$4,$5,to_timestamp($6/1000.0))`,[sessionId,parsed.data.userId,parsed.data.region,parsed.data.build,sha256(parsed.data.deviceNonce),expiresAt]);
+  if(pool)await pool.query(`insert into game_sessions(id,user_id,region,build,device_nonce_hash,expires_at,auth_provider) values($1,$2,$3,$4,$5,to_timestamp($6/1000.0),'legacy-bootstrap')`,[sessionId,parsed.data.userId,parsed.data.region,parsed.data.build,sha256(parsed.data.deviceNonce),expiresAt]);
   if(redis)await redis.setex(`game-session:${sessionId}`,SESSION_TTL_SECONDS,JSON.stringify({userId:parsed.data.userId,region:parsed.data.region,build:parsed.data.build,protocol:BACKEND_PROTOCOL_VERSION}));
-  return reply.code(201).send({sessionId,sessionToken:token,expiresAt:new Date(expiresAt).toISOString(),authority:'authenticated-session',compatibility:compatibilityPayload()});
+  return reply.code(201).send({sessionId,sessionToken:token,userId:parsed.data.userId,region:parsed.data.region,expiresAt:new Date(expiresAt).toISOString(),authority:'authenticated-session',compatibility:compatibilityPayload()});
+});
+
+const platformSessionSchema=z.object({assertion:z.string().min(32).max(4096),deviceNonce:z.string().min(8).max(128)});
+app.post('/v1/auth/platform-session',async(req,reply)=>{
+  const parsed=platformSessionSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
+  if(!pool)return reply.code(503).send({error:'database-not-configured'});
+  if(!PLATFORM_IDENTITY_ASSERTION_SECRET)return reply.code(503).send({error:'platform-identity-verifier-not-configured'});
+  const assertion=verifyPlatformIdentityAssertion(parsed.data.assertion);
+  if(!assertion)return reply.code(401).send({error:'platform-identity-assertion-invalid'});
+  if(!isBuildCompatible(assertion.build))return incompatibleBuild(reply,assertion.build);
+
+  const subjectHash=sha256(`${assertion.provider}:${assertion.subject}`);
+  const sessionId=crypto.randomUUID(),expiresAt=Date.now()+SESSION_TTL_MS;
+  const client=await pool.connect();
+  let userId='';
+  try{
+    await client.query('begin');
+    await client.query(`delete from platform_identity_assertions where expires_at<now()-interval '24 hours'`);
+    const consumed=await client.query(`insert into platform_identity_assertions(id,provider,provider_subject_hash,issued_at,expires_at,consumed_at)
+      values($1,$2,$3,to_timestamp($4/1000.0),to_timestamp($5/1000.0),now())
+      on conflict(id) do nothing returning id`,
+      [assertion.jti,assertion.provider,subjectHash,assertion.iat,assertion.exp]);
+    if(!consumed.rowCount){await client.query('rollback');return reply.code(409).send({error:'platform-identity-assertion-replayed'});}
+
+    await client.query('select pg_advisory_xact_lock(hashtext($1))',[`${assertion.provider}|${subjectHash}`]);
+    const existing=await client.query(`select pi.user_id,u.status
+      from platform_identities pi join users u on u.id=pi.user_id
+      where pi.provider=$1 and pi.provider_subject_hash=$2`,[assertion.provider,subjectHash]);
+    if(existing.rowCount){
+      userId=String(existing.rows[0].user_id);
+      if(String(existing.rows[0].status)!=='active'){
+        await client.query('commit');
+        return reply.code(403).send({error:'account-not-active'});
+      }
+      await client.query(`update platform_identities set last_seen_at=now() where provider=$1 and provider_subject_hash=$2`,[assertion.provider,subjectHash]);
+      await client.query('update users set last_seen_at=now() where id=$1',[userId]);
+    }else{
+      const syntheticEmail=`platform-${assertion.provider}-${subjectHash.slice(0,32)}@identity.shadow.invalid`;
+      const created=await client.query(`insert into users(email,status,trust_score,last_seen_at)
+        values($1,'active',75,now()) returning id`,[syntheticEmail]);
+      userId=String(created.rows[0].id);
+      await client.query(`insert into platform_identities(provider,provider_subject_hash,user_id,last_seen_at)
+        values($1,$2,$3,now())`,[assertion.provider,subjectHash,userId]);
+    }
+
+    await client.query(`insert into game_sessions(id,user_id,region,build,device_nonce_hash,expires_at,auth_provider,identity_assertion_id)
+      values($1,$2,$3,$4,$5,to_timestamp($6/1000.0),$7,$8)`,
+      [sessionId,userId,assertion.region,assertion.build,sha256(parsed.data.deviceNonce),expiresAt,assertion.provider,assertion.jti]);
+    await client.query('commit');
+  }catch(error){await client.query('rollback');throw error;}finally{client.release();}
+
+  const token=signSession({sid:sessionId,uid:userId,region:assertion.region,build:assertion.build,protocol:BACKEND_PROTOCOL_VERSION,exp:expiresAt});
+  if(redis)await redis.setex(`game-session:${sessionId}`,SESSION_TTL_SECONDS,JSON.stringify({userId,region:assertion.region,build:assertion.build,protocol:BACKEND_PROTOCOL_VERSION}));
+  return reply.code(201).send({sessionId,sessionToken:token,userId,region:assertion.region,provider:assertion.provider,
+    expiresAt:new Date(expiresAt).toISOString(),authority:'platform-identity-assertion',compatibility:compatibilityPayload()});
 });
 
 app.post('/v1/auth/refresh',async(req,reply)=>{
