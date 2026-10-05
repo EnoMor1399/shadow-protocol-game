@@ -161,7 +161,7 @@ test('authenticated callbacks cannot restore a cleared or replaced session', asy
   }
   assert.match(cpp, /ActiveAuthenticatedRequests.Remove\(Request\) == 0/);
   assert.match(cpp, /Request->GetHeader\(TEXT\("Authorization"\)\) == TEXT\("Bearer "\) \+ SessionToken/);
-  assert.match(cpp, /ClearAuthenticatedSession\(\)\s*\{\s*CancelAuthenticatedRequests\(\)/);
+  assert.match(cpp, /ClearAuthenticatedSession\(\)\s*\{\s*CancelPlatformSessionRequest\(\);\s*CancelAuthenticatedRequests\(\)/);
   assert.match(cpp, /OnProcessRequestComplete\(\).Unbind\(\);\s*Request->CancelRequest\(\)/);
   assert.match(cpp, /if \(bRefreshPending\) return/);
   assert.match(cpp, /Request->SetTimeout\(15.0f\)/);
