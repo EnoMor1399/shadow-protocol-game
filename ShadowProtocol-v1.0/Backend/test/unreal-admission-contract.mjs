@@ -372,3 +372,25 @@ test('movement rebinding validates a complete layout before changing action or a
   assert.match(widget, /SetMovementKeys\(Keys, Error\)/);
   assert.match(widget, /Selector->GetIsSelectingKey\(\)/);
 });
+
+
+test('platform identity assertion exchange installs backend session without client bootstrap secrets', async () => {
+  const header = await source('../../Source/ShadowProtocol/Public/SPBackendSessionSubsystem.h');
+  const cpp = await source('../../Source/ShadowProtocol/Private/SPBackendSessionSubsystem.cpp');
+
+  assert.match(header, /FSPAuthenticatedSessionInfo/);
+  assert.match(header, /OnAuthenticatedSessionEstablished/);
+  assert.match(header, /ExchangePlatformIdentityAssertion/);
+  assert.match(header, /GetAuthenticatedUserId/);
+  assert.match(header, /GetAuthenticatedProvider/);
+  assert.match(cpp, /\/v1\/auth\/platform-session/);
+  assert.match(cpp, /Payload->SetStringField\(TEXT\("assertion"\), IdentityAssertion\)/);
+  assert.match(cpp, /Payload->SetStringField\(TEXT\("deviceNonce"\), DeviceNonce\)/);
+  assert.match(cpp, /PlatformSessionGeneration/);
+  assert.match(cpp, /Request->SetTimeout\(15\.0f\)/);
+  assert.match(cpp, /Authority\.Equals\(TEXT\("platform-identity-assertion"\)/);
+  assert.match(cpp, /OnAuthenticatedSessionEstablished\.Broadcast/);
+  assert.doesNotMatch(cpp, /x-session-bootstrap-secret/);
+  assert.doesNotMatch(cpp, /SESSION_BOOTSTRAP_SECRET/);
+  assert.doesNotMatch(cpp, /PLATFORM_IDENTITY_ASSERTION_SECRET/);
+});

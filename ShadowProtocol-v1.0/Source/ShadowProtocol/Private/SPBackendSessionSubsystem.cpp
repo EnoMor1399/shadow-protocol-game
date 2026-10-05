@@ -43,6 +43,7 @@ void USPBackendSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection
 
 void USPBackendSessionSubsystem::Deinitialize()
 {
+    CancelPlatformSessionRequest();
     if (GEngine)
     {
         GEngine->OnNetworkFailure().Remove(NetworkFailureHandle);
@@ -116,6 +117,19 @@ void USPBackendSessionSubsystem::ExpireSession()
     ClearAuthenticatedSession();
     bSessionExpired = true;
     OnSessionExpired.Broadcast(TEXT("Your backend session expired. Sign in again for matchmaking or reconnect."));
+}
+
+void USPBackendSessionSubsystem::CancelPlatformSessionRequest()
+{
+    ++PlatformSessionGeneration;
+    if (!PlatformSessionRequest.IsValid())
+    {
+        return;
+    }
+
+    PlatformSessionRequest->OnProcessRequestComplete().Unbind();
+    PlatformSessionRequest->CancelRequest();
+    PlatformSessionRequest.Reset();
 }
 
 void USPBackendSessionSubsystem::CancelAuthenticatedRequests()
@@ -310,6 +324,135 @@ bool USPBackendSessionSubsystem::ParseCompatibility(const TSharedPtr<FJsonObject
     return bHasRelease && bHasNetworkBuild && bHasContentRevision && bHasProtocol;
 }
 
+void USPBackendSessionSubsystem::ExchangePlatformIdentityAssertion(const FString& IdentityAssertion, const FString& DeviceNonce)
+{
+    if (!bCompatibilityVerified)
+    {
+        OnRequestFailed.Broadcast(TEXT("platform-session"), TEXT("Compatibility must be verified before platform sign-in."));
+        return;
+    }
+
+    if (IdentityAssertion.Len() < 32 || DeviceNonce.Len() < 8 || DeviceNonce.Len() > 128)
+    {
+        OnRequestFailed.Broadcast(TEXT("platform-session"), TEXT("Platform identity assertion or device nonce is incomplete."));
+        return;
+    }
+
+    ClearAuthenticatedSession();
+    CancelPlatformSessionRequest();
+
+    const uint64 RequestGeneration = ++PlatformSessionGeneration;
+    const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+    Payload->SetStringField(TEXT("assertion"), IdentityAssertion);
+    Payload->SetStringField(TEXT("deviceNonce"), DeviceNonce);
+
+    const TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
+    PlatformSessionRequest = Request;
+    Request->SetTimeout(15.0f);
+    Request->SetURL(BuildUrl(TEXT("/v1/auth/platform-session")));
+    Request->SetVerb(TEXT("POST"));
+    Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+    Request->SetHeader(TEXT("Accept"), TEXT("application/json"));
+    Request->SetContentAsString(SerializeJson(Payload));
+    Request->OnProcessRequestComplete().BindUObject(
+        this,
+        &USPBackendSessionSubsystem::HandlePlatformSessionResponse,
+        RequestGeneration);
+
+    if (!Request->ProcessRequest())
+    {
+        if (PlatformSessionRequest == Request)
+        {
+            PlatformSessionRequest.Reset();
+        }
+        OnRequestFailed.Broadcast(TEXT("platform-session"), TEXT("Unable to start platform identity session exchange."));
+    }
+}
+
+void USPBackendSessionSubsystem::HandlePlatformSessionResponse(
+    FHttpRequestPtr Request,
+    FHttpResponsePtr Response,
+    bool bWasSuccessful,
+    uint64 RequestGeneration)
+{
+    if (!Request.IsValid() || Request != PlatformSessionRequest || RequestGeneration != PlatformSessionGeneration)
+    {
+        return;
+    }
+    PlatformSessionRequest.Reset();
+
+    if (!bWasSuccessful || !Response.IsValid())
+    {
+        BroadcastHttpFailure(TEXT("platform-session"), Response, bWasSuccessful);
+        return;
+    }
+
+    TSharedPtr<FJsonObject> JsonObject;
+    const bool bParsedJson = ParseJsonObject(Response->GetContentAsString(), JsonObject);
+    const int32 StatusCode = Response->GetResponseCode();
+
+    if (StatusCode == 426)
+    {
+        HandleUpgradeResponse(JsonObject, TEXT("Identity gateway assertion targets an incompatible game build."));
+        return;
+    }
+
+    if (StatusCode < 200 || StatusCode >= 300)
+    {
+        BroadcastHttpFailure(TEXT("platform-session"), Response, bWasSuccessful);
+        return;
+    }
+
+    if (!bParsedJson || !JsonObject.IsValid())
+    {
+        OnRequestFailed.Broadcast(TEXT("platform-session"), TEXT("Backend returned invalid platform-session JSON."));
+        return;
+    }
+
+    FString NewSessionId;
+    FString NewSessionToken;
+    FString UserId;
+    FString Provider;
+    FString Region;
+    FString ExpiresAt;
+    FString Authority;
+    JsonObject->TryGetStringField(TEXT("sessionId"), NewSessionId);
+    JsonObject->TryGetStringField(TEXT("sessionToken"), NewSessionToken);
+    JsonObject->TryGetStringField(TEXT("userId"), UserId);
+    JsonObject->TryGetStringField(TEXT("provider"), Provider);
+    JsonObject->TryGetStringField(TEXT("region"), Region);
+    JsonObject->TryGetStringField(TEXT("expiresAt"), ExpiresAt);
+    JsonObject->TryGetStringField(TEXT("authority"), Authority);
+
+    if (NewSessionId.IsEmpty()
+        || NewSessionToken.IsEmpty()
+        || UserId.IsEmpty()
+        || Provider.IsEmpty()
+        || Region.IsEmpty()
+        || !Authority.Equals(TEXT("platform-identity-assertion"), ESearchCase::CaseSensitive)
+        || !SetSessionExpiry(ExpiresAt))
+    {
+        ClearAuthenticatedSession();
+        OnRequestFailed.Broadcast(TEXT("platform-session"), TEXT("Backend platform-session response is incomplete, expired or untrusted."));
+        return;
+    }
+
+    SessionId = NewSessionId;
+    SessionToken = NewSessionToken;
+    SessionRegion = Region;
+    SessionUserId = UserId;
+    SessionProvider = Provider;
+    bSessionExpired = false;
+
+    FSPAuthenticatedSessionInfo SessionInfo;
+    SessionInfo.SessionId = SessionId;
+    SessionInfo.UserId = SessionUserId;
+    SessionInfo.Provider = SessionProvider;
+    SessionInfo.Region = SessionRegion;
+    SessionInfo.ExpiresAt = SessionExpiresAt;
+    OnAuthenticatedSessionEstablished.Broadcast(SessionInfo);
+}
+
 void USPBackendSessionSubsystem::InstallAuthenticatedSession(const FString& InSessionId, const FString& InSessionToken, const FString& InRegion, const FString& InExpiresAt)
 {
     ClearAuthenticatedSession();
@@ -427,6 +570,7 @@ void USPBackendSessionSubsystem::HandleSessionRefreshResponse(FHttpRequestPtr Re
 
 void USPBackendSessionSubsystem::ClearAuthenticatedSession()
 {
+    CancelPlatformSessionRequest();
     CancelAuthenticatedRequests();
     SessionExpiryMonotonic = 0.0;
     SessionExpiryUtc = FDateTime();
@@ -435,6 +579,8 @@ void USPBackendSessionSubsystem::ClearAuthenticatedSession()
     SessionToken.Reset();
     SessionRegion.Reset();
     SessionExpiresAt.Reset();
+    SessionUserId.Reset();
+    SessionProvider.Reset();
 }
 
 void USPBackendSessionSubsystem::AllocateProtocolServer(const FString& Region, bool bRanked)

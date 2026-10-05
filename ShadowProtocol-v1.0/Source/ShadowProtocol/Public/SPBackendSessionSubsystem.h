@@ -79,6 +79,27 @@ struct FSPMatchAllocation
 };
 
 USTRUCT(BlueprintType)
+struct FSPAuthenticatedSessionInfo
+{
+    GENERATED_BODY()
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
+    FString SessionId;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
+    FString UserId;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
+    FString Provider;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
+    FString Region;
+
+    UPROPERTY(BlueprintReadOnly, Category="Shadow Protocol|Network")
+    FString ExpiresAt;
+};
+
+USTRUCT(BlueprintType)
 struct FSPReconnectResult
 {
     GENERATED_BODY()
@@ -107,6 +128,7 @@ struct FSPReconnectResult
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSPCompatibilityChecked, bool, bCompatible, FSPBackendCompatibility, Compatibility);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPAllocationCompleted, FSPMatchAllocation, Allocation);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPAuthenticatedSessionEstablished, FSPAuthenticatedSessionInfo, Session);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPSessionExpired, FString, Reason);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSPSessionRefreshed, FString, SessionId, FString, ExpiresAt);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FSPReconnectTicketIssued, FString, ReconnectToken, FString, ReconnectDeadline, int32, GraceSeconds);
@@ -130,6 +152,9 @@ class SHADOWPROTOCOL_API USPBackendSessionSubsystem : public UGameInstanceSubsys
 public:
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
+    UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Network")
+    FSPAuthenticatedSessionEstablished OnAuthenticatedSessionEstablished;
+
     UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Network")
     FSPSessionExpired OnSessionExpired;
 
@@ -176,6 +201,9 @@ public:
     void CheckCompatibility();
 
     UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
+    void ExchangePlatformIdentityAssertion(const FString& IdentityAssertion, const FString& DeviceNonce);
+
+    UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
     void InstallAuthenticatedSession(const FString& InSessionId, const FString& InSessionToken, const FString& InRegion, const FString& InExpiresAt);
 
     UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
@@ -192,6 +220,12 @@ public:
 
     UFUNCTION(BlueprintPure, Category="Shadow Protocol|Network")
     FString GetSessionExpiresAt() const { return SessionExpiresAt; }
+
+    UFUNCTION(BlueprintPure, Category="Shadow Protocol|Network")
+    FString GetAuthenticatedUserId() const { return SessionUserId; }
+
+    UFUNCTION(BlueprintPure, Category="Shadow Protocol|Network")
+    FString GetAuthenticatedProvider() const { return SessionProvider; }
 
     UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Network")
     void AllocateProtocolServer(const FString& Region, bool bRanked = true);
@@ -229,16 +263,21 @@ private:
     bool bRefreshPending = false;
     TArray<FHttpRequestPtr> ActiveAuthenticatedRequests;
     FHttpRequestPtr CompatibilityRequest;
+    FHttpRequestPtr PlatformSessionRequest;
+    uint64 PlatformSessionGeneration = 0;
     bool TickSessionExpiry(float DeltaSeconds);
     bool SetSessionExpiry(const FString& ExpiresAt);
     void ExpireSession();
     bool ConsumeAuthenticatedResponse(FHttpRequestPtr Request);
     void CancelAuthenticatedRequests();
+    void CancelPlatformSessionRequest();
     FString BackendBaseUrl = TEXT("http://127.0.0.1:8080");
     FString SessionId;
     FString SessionToken;
     FString SessionRegion;
     FString SessionExpiresAt;
+    FString SessionUserId;
+    FString SessionProvider;
     bool bCompatibilityVerified = false;
     bool bPendingRankedAllocation = true;
     FSPBackendCompatibility LastCompatibility;
@@ -247,6 +286,7 @@ private:
     bool CanUseAuthenticatedMatchEndpoint(const FString& Context);
     TSharedRef<IHttpRequest, ESPMode::ThreadSafe> CreateAuthenticatedJsonRequest(const FString& Path, const FString& Verb);
     void HandleCompatibilityResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+    void HandlePlatformSessionResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, uint64 RequestGeneration);
     void HandleSessionRefreshResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void HandleAllocationResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void HandleReconnectTicketResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
