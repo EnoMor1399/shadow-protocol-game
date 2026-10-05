@@ -36,6 +36,7 @@ before(async () => {
       DATABASE_URL: '',
       REDIS_URL: '',
       SESSION_SIGNING_SECRET: 'ci-production-session-secret',
+      ENABLE_LEGACY_SESSION_BOOTSTRAP: 'true',
       SESSION_BOOTSTRAP_SECRET: BOOTSTRAP_SECRET,
       MATCH_SERVER_SECRET: 'ci-production-match-secret',
       ACCEPTED_NETWORK_BUILDS: 'SP-1.0.1'
