@@ -243,7 +243,7 @@ FString USPControlSettings::GetActionKeyLabel(FName Action)
     FString Label;
     for (const auto& Mapping : GetDefault<UInputSettings>()->GetActionMappings())
     {
-        if (Mapping.ActionName != Action || Mapping.Key.IsGamepadKey()) continue;
+        if (Mapping.ActionName != Action) continue;
         FString Key;
         if (Mapping.bCtrl) Key += TEXT("Ctrl+");
         if (Mapping.bAlt) Key += TEXT("Alt+");
