@@ -2,7 +2,7 @@
 #include "Components/ScrollBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "InputCoreTypes.h"
-#include "SPReadyRoomWidget.h"
+#include "SPReadyRoomWidget.h"\n#include "SPControlSettings.h"
 #include "SPObserverPlayerController.h"
 #include "SPPlayerState.h"
 #include "SPProtocolGameState.h"
@@ -67,7 +67,7 @@ TSharedRef<SWidget> USPReadyRoomWidget::RebuildWidget()
         Column->AddChildToVerticalBox(ReadyButton)->SetPadding(FMargin(0, 16));
         auto* ControlsButton = WidgetTree->ConstructWidget<UButton>();
         auto* ControlsLabel = WidgetTree->ConstructWidget<UTextBlock>();
-        ControlsLabel->SetText(FText::FromString(TEXT("Controls & mouse settings  [Esc]")));
+        ControlsLabel->SetText(FText::FromString(FString::Printf(TEXT("Controls & input settings  [%s]"), *USPControlSettings::GetActionKeyLabel(TEXT("Controls")))));
         ControlsLabel->SetColorAndOpacity(FSlateColor(FLinearColor::Black));
         ControlsButton->SetContent(ControlsLabel);
         ControlsButton->OnClicked.AddUniqueDynamic(this, &USPReadyRoomWidget::OpenControls);
@@ -166,7 +166,7 @@ void USPReadyRoomWidget::OpenControls()
 }
 FReply USPReadyRoomWidget::NativeOnPreviewKeyDown(const FGeometry& Geometry, const FKeyEvent& Event)
 {
-    if (Event.GetKey() == EKeys::Escape && !Event.IsRepeat())
+    if ((Event.GetKey() == EKeys::Escape || Event.GetKey() == EKeys::Gamepad_Special_Right) && !Event.IsRepeat())
     {
         OpenControls();
         return FReply::Handled();
