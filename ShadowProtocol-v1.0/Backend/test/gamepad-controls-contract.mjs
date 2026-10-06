@@ -54,3 +54,19 @@ test('keyboard override machinery preserves controller mappings', async () => {
   assert.match(cpp, /Seen\.Contains\(Mapping\.ActionName\) && !Mapping\.Key\.IsGamepadKey\(\)/);
   assert.match(cpp, /if \(Mapping\.Key\.IsGamepadKey\(\)\) continue/);
 });
+
+test('native UI exposes controller shortcuts without enabling gamepad rebinding', async () => {
+  const settings = await source('../../Source/ShadowProtocol/Private/SPControlSettings.cpp');
+  const hud = await source('../../Source/ShadowProtocol/Private/SPCombatHUD.cpp');
+  const controls = await source('../../Source/ShadowProtocol/Private/SPControlsWidget.cpp');
+  const readyRoom = await source('../../Source/ShadowProtocol/Private/SPReadyRoomWidget.cpp');
+
+  assert.doesNotMatch(settings, /Mapping\.ActionName != Action \|\| Mapping\.Key\.IsGamepadKey\(\)/);
+  assert.match(hud, /GetActionKeyLabel\(TEXT\("Controls"\)\)/);
+  assert.match(controls, /EKeys::Gamepad_Special_Right/);
+  assert.match(controls, /TurnGamepad/);
+  assert.match(controls, /LookUpGamepad/);
+  assert.match(readyRoom, /EKeys::Gamepad_Special_Right/);
+  assert.match(readyRoom, /Controls & input settings/);
+  assert.match(controls, /SetAllowGamepadKeys\(false\)/);
+});
