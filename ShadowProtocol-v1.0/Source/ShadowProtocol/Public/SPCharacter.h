@@ -56,7 +56,7 @@ public:
     UFUNCTION(BlueprintImplementableEvent, Category="Combat") void BP_OnSuppressed(float Intensity);
 
 protected:
-    void MoveForward(float V); void MoveRight(float V); void Turn(float V); void LookUp(float V);
+    void MoveForward(float V); void MoveRight(float V); void Turn(float V); void LookUp(float V);\n    void TurnGamepad(float V); void LookUpGamepad(float V);
     void Fire(); void Reload(); void BeginSilent(); void EndSilent();
     void BeginAim(); void EndAim(); void ReleaseAimKey(); void BeginSprint(); void EndSprint();
     void CycleEquipment(); void ThrowEquipment(); void CycleSquadOrder(); void Fortify();
