@@ -237,7 +237,7 @@ test('controls modal releases held input and preserves paired controller ignore 
   assert.match(pawn, /HeldLean.Reset\(\)/);
   assert.match(pawn, /PC->IsGameplayInputBlocked\(\)/);
   assert.match(widget, /NativeOnPreviewKeyDown/);
-  assert.match(widget, /EKeys::Escape && !Event.IsRepeat/);
+  assert.match(widget, /EKeys::Escape[\\s\\S]*EKeys::Gamepad_Special_Right[\\s\\S]*!Event\\.IsRepeat/);
   assert.match(widget, /GetActionMappings/);
 });
 
