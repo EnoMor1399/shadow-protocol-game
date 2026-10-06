@@ -54,7 +54,7 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
             return Item;
         };
         Label(TEXT("SHADOW PROTOCOL / CONTROLS"), 28, FLinearColor(0.35f, 0.85f, 0.8f));
-        Label(TEXT("The online match continues while this panel is open. Esc closes this panel. Tab moves between controls."), 16, FLinearColor::White);
+        Label(TEXT("The online match continues while this panel is open. Esc or Menu/Start closes this panel. Tab or controller navigation moves between controls."), 16, FLinearColor::White);
         ResumeButton = Button(TEXT("Return to game / ready room"));
         ResumeButton->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::CloseControls);
         SensitivityLabel = Label(TEXT("Mouse sensitivity"), 20, FLinearColor::White);
@@ -69,10 +69,10 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
         AimSensitivitySlider->SetStepSize(0.05f);
         AimSensitivitySlider->OnValueChanged.AddUniqueDynamic(this, &USPControlsWidget::SetAimSensitivity);
         Column->AddChildToVerticalBox(AimSensitivitySlider);
-        Label(TEXT("Aim sensitivity scales both mouse axes while aiming. 1.00x keeps your normal sensitivity."), 16, FLinearColor::White);
+        Label(TEXT("Aim sensitivity scales mouse and right-stick look while aiming. 1.00x keeps your normal sensitivity."), 16, FLinearColor::White);
         InvertCheck = WidgetTree->ConstructWidget<UCheckBox>();
         auto* InvertLabel = WidgetTree->ConstructWidget<UTextBlock>();
-        InvertLabel->SetText(FText::FromString(TEXT("Invert vertical mouse look")));
+        InvertLabel->SetText(FText::FromString(TEXT("Invert vertical look (mouse + controller)")));
         InvertCheck->SetContent(InvertLabel);
         InvertCheck->OnCheckStateChanged.AddUniqueDynamic(this, &USPControlsWidget::SetInvert);
         Column->AddChildToVerticalBox(InvertCheck)->SetPadding(FMargin(0, 12));
@@ -128,8 +128,10 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
         Button(TEXT("Apply movement keys"))->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ApplyMovementKeys);
         Button(TEXT("Discard movement draft"))->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::RefreshMovementKeys);
         MovementFeedback = Label(TEXT("Each direction needs a different keyboard key. Applying replaces existing keyboard movement bindings."), 16, FLinearColor::White);
-        for (const FControlHint& Hint : {FControlHint{TEXT("Turn"), TEXT("Look horizontally")},
-            FControlHint{TEXT("LookUp"), TEXT("Look vertically")}})
+        for (const FControlHint& Hint : {FControlHint{TEXT("Turn"), TEXT("Mouse look horizontally")},
+            FControlHint{TEXT("LookUp"), TEXT("Mouse look vertically")},
+            FControlHint{TEXT("TurnGamepad"), TEXT("Controller look horizontally")},
+            FControlHint{TEXT("LookUpGamepad"), TEXT("Controller look vertically")}})
         {
             FString Keys;
             for (const auto& Mapping : Input->GetAxisMappings())
@@ -240,7 +242,7 @@ void USPControlsWidget::CloseControls()
 }
 FReply USPControlsWidget::NativeOnPreviewKeyDown(const FGeometry& Geometry, const FKeyEvent& Event)
 {
-    if (Event.GetKey() == EKeys::Escape && !Event.IsRepeat())
+    if ((Event.GetKey() == EKeys::Escape || Event.GetKey() == EKeys::Gamepad_Special_Right) && !Event.IsRepeat())
     {
         if (BindingKey && BindingKey->GetIsSelectingKey())
             return Super::NativeOnPreviewKeyDown(Geometry, Event); // let the selector cancel capture
