@@ -62,7 +62,7 @@ async function bootstrapPost(path, body, attestation = '') {
 async function nodePost(path, body, serverId, nodeCredential) {
   return fetch(`${BASE_URL}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-sp-server-id': serverId, 'x-sp-node-credential': nodeCredential }, body: JSON.stringify(body) });
 }
-function issuePlatformIdentityAssertion(subject, region='acc', build='SP-1.0.1', overrides={}) {
+function issuePlatformIdentityAssertion(subject, region='acc', build='SP-1.0.1', deviceNonce='platform-integration-device-default', overrides={}) {
   const iat=Date.now();
   const claims={
     jti:randomUUID(),
@@ -74,6 +74,7 @@ function issuePlatformIdentityAssertion(subject, region='acc', build='SP-1.0.1',
     subject,
     region,
     build,
+    deviceNonceHash:createHash('sha256').update(deviceNonce).digest('hex'),
     ...overrides
   };
   const encoded=Buffer.from(JSON.stringify(claims)).toString('base64url');
@@ -91,7 +92,7 @@ async function bindPlatformIdentity(userId,email,subject) {
 async function createPlayerSession(userId, email, region, nonce) {
   const subject=`user-${userId}`;
   await bindPlatformIdentity(userId,email,subject);
-  const assertion=issuePlatformIdentityAssertion(subject,region);
+  const assertion=issuePlatformIdentityAssertion(subject,region,'SP-1.0.1',nonce);
   const response=await fetch(`${BASE_URL}/v1/auth/platform-session`,{
     method:'POST',
     headers:{'content-type':'application/json'},
@@ -157,12 +158,13 @@ after(async () => {
 
 test('exchanges single-use platform identity assertions into stable backend sessions', async () => {
   const subject='platform-integration-primary';
-  const firstAssertion=issuePlatformIdentityAssertion(subject);
+  const firstNonce='platform-integration-device-1';
+  const firstAssertion=issuePlatformIdentityAssertion(subject,'acc','SP-1.0.1',firstNonce);
 
   const firstResponse=await fetch(`${BASE_URL}/v1/auth/platform-session`,{
     method:'POST',
     headers:{'content-type':'application/json'},
-    body:JSON.stringify({assertion:firstAssertion,deviceNonce:'platform-integration-device-1'})
+    body:JSON.stringify({assertion:firstAssertion,deviceNonce:firstNonce})
   });
   assert.equal(firstResponse.status,201);
   const first=await firstResponse.json();
@@ -176,26 +178,38 @@ test('exchanges single-use platform identity assertions into stable backend sess
   const replay=await fetch(`${BASE_URL}/v1/auth/platform-session`,{
     method:'POST',
     headers:{'content-type':'application/json'},
-    body:JSON.stringify({assertion:firstAssertion,deviceNonce:'platform-integration-device-2'})
+    body:JSON.stringify({assertion:firstAssertion,deviceNonce:firstNonce})
   });
   assert.equal(replay.status,409);
   assert.equal((await replay.json()).error,'platform-identity-assertion-replayed');
 
-  const secondAssertion=issuePlatformIdentityAssertion(subject);
+  const secondNonce='platform-integration-device-3';
+  const secondAssertion=issuePlatformIdentityAssertion(subject,'acc','SP-1.0.1',secondNonce);
   const secondResponse=await fetch(`${BASE_URL}/v1/auth/platform-session`,{
     method:'POST',
     headers:{'content-type':'application/json'},
-    body:JSON.stringify({assertion:secondAssertion,deviceNonce:'platform-integration-device-3'})
+    body:JSON.stringify({assertion:secondAssertion,deviceNonce:secondNonce})
   });
   assert.equal(secondResponse.status,201);
   const second=await secondResponse.json();
   assert.equal(second.userId,first.userId);
 
-  const badBuildAssertion=issuePlatformIdentityAssertion('platform-bad-build','acc','SP-0.9.0');
+  const boundNonce='platform-integration-device-bound';
+  const boundAssertion=issuePlatformIdentityAssertion('platform-nonce-bound','acc','SP-1.0.1',boundNonce);
+  const wrongNonce=await fetch(`${BASE_URL}/v1/auth/platform-session`,{
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({assertion:boundAssertion,deviceNonce:'platform-integration-device-wrong'})
+  });
+  assert.equal(wrongNonce.status,401);
+  assert.equal((await wrongNonce.json()).error,'platform-identity-nonce-mismatch');
+
+  const badBuildNonce='platform-integration-device-4';
+  const badBuildAssertion=issuePlatformIdentityAssertion('platform-bad-build','acc','SP-0.9.0',badBuildNonce);
   const badBuild=await fetch(`${BASE_URL}/v1/auth/platform-session`,{
     method:'POST',
     headers:{'content-type':'application/json'},
-    body:JSON.stringify({assertion:badBuildAssertion,deviceNonce:'platform-integration-device-4'})
+    body:JSON.stringify({assertion:badBuildAssertion,deviceNonce:badBuildNonce})
   });
   assert.equal(badBuild.status,426);
 
