@@ -40,5 +40,5 @@ export class FixedWindowLimiter {
 }
 
 export function credentialFingerprint(provider: string, authToken: string, secret: string): string {
-  return createHmac('sha256', secret).update(provider).update('\0').update(authToken).digest('hex');
+  return createHmac('sha256', secret).update('credential-limiter\0').update(provider).update('\0').update(authToken).digest('hex');
 }
