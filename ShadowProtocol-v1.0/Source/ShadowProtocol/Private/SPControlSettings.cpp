@@ -211,6 +211,61 @@ bool USPControlSettings::FindGamepadActionUsingKey(FKey Key, FName ExcludingActi
     return false;
 }
 
+bool USPControlSettings::SwapGamepadActionBinding(FName Action, FName ConflictingAction, FKey NewKey, FString& Error, bool bSaveSettings)
+{
+    if (!CanRebindAction(Action) || !CanRebindAction(ConflictingAction) || Action == ConflictingAction
+        || !NewKey.IsValid() || !NewKey.IsGamepadKey())
+    {
+        Error = TEXT("That controller binding cannot be swapped.");
+        return false;
+    }
+
+    FName CurrentOwner;
+    if (!FindGamepadActionUsingKey(NewKey, Action, CurrentOwner) || CurrentOwner != ConflictingAction)
+    {
+        Error = TEXT("The controller binding changed before the swap could be confirmed. Review the current buttons and try again.");
+        return false;
+    }
+
+    FKey PreviousActionKey;
+    int32 ActionKeyCount = 0;
+    int32 ConflictKeyCount = 0;
+    for (const auto& Mapping : GetDefault<UInputSettings>()->GetActionMappings())
+    {
+        if (!Mapping.Key.IsGamepadKey()) continue;
+        if (Mapping.ActionName != Action && Mapping.ActionName != ConflictingAction) continue;
+        if (Mapping.ActionName == Action)
+        {
+            ++ActionKeyCount;
+            PreviousActionKey = Mapping.Key;
+        }
+        else ++ConflictKeyCount;
+    }
+
+    if (ActionKeyCount != 1 || ConflictKeyCount != 1
+        || !PreviousActionKey.IsValid() || PreviousActionKey == NewKey)
+    {
+        Error = TEXT("Controller swap requires exactly one gamepad button per action.");
+        return false;
+    }
+
+    const auto PreviousOverrides = GamepadActionOverrides;
+    GamepadActionOverrides.RemoveAll([&](const FInputActionKeyMapping& Mapping)
+        { return Mapping.ActionName == Action || Mapping.ActionName == ConflictingAction; });
+    GamepadActionOverrides.Add(FInputActionKeyMapping(Action, NewKey));
+    GamepadActionOverrides.Add(FInputActionKeyMapping(ConflictingAction, PreviousActionKey));
+
+    if (!ApplyActionOverrides(Error))
+    {
+        GamepadActionOverrides = PreviousOverrides;
+        return false;
+    }
+
+    if (bSaveSettings) SaveConfig();
+    Error.Reset();
+    return true;
+}
+
 bool USPControlSettings::FindActionUsingKey(FKey Key, FName ExcludingAction, FName& OutAction) const
 {
     OutAction = NAME_None;
