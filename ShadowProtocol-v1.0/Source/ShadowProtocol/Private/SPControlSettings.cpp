@@ -101,7 +101,7 @@ bool USPControlSettings::ApplyActionOverrides(FString& Error)
         for (const auto& Axis : CandidateAxes)
             if (Axis.Key == Key) { Error = TEXT("That key is used for movement or look. Choose a different key."); return false; }
     }
-    // Remove every overridden action first, allowing saved swaps to reload atomically.
+    // Remove every overridden keyboard/mouse action first, allowing saved swaps to reload atomically.
     Candidate.RemoveAll([&](const FInputActionKeyMapping& Mapping)
         { return Seen.Contains(Mapping.ActionName) && !Mapping.Key.IsGamepadKey(); });
     for (const auto& Override : ActionOverrides)
@@ -114,6 +114,40 @@ bool USPControlSettings::ApplyActionOverrides(FString& Error)
             }
         Candidate.Add(Override);
     }
+
+    TSet<FName> GamepadSeen;
+    for (const auto& Override : GamepadActionOverrides)
+    {
+        const FKey Key = Override.Key;
+        if (!CanRebindAction(Override.ActionName) || GamepadSeen.Contains(Override.ActionName)
+            || !Key.IsValid() || !Key.IsGamepadKey() || !Key.IsBindableToActions()
+            || Override.bShift || Override.bCtrl || Override.bAlt || Override.bCmd)
+        {
+            Error = TEXT("Choose one controller button for each supported action.");
+            return false;
+        }
+        for (const auto& Axis : CandidateAxes)
+            if (Axis.Key == Key)
+            {
+                Error = TEXT("That controller input is used by movement or camera look. Choose another button.");
+                return false;
+            }
+        GamepadSeen.Add(Override.ActionName);
+    }
+
+    Candidate.RemoveAll([&](const FInputActionKeyMapping& Mapping)
+        { return GamepadSeen.Contains(Mapping.ActionName) && Mapping.Key.IsGamepadKey(); });
+    for (const auto& Override : GamepadActionOverrides)
+    {
+        for (const auto& Existing : Candidate)
+            if (Existing.Key == Override.Key && Existing.ActionName != Override.ActionName)
+            {
+                Error = FString::Printf(TEXT("That controller button is already assigned to %s."), *Existing.ActionName.ToString());
+                return false;
+            }
+        Candidate.Add(Override);
+    }
+
     for (const FKey Key : MovementKeys)
         for (const auto& Action : Candidate)
             if (Action.Key == Key)
@@ -135,6 +169,46 @@ bool USPControlSettings::RebindAction(FName Action, FKey Key, FString& Error)
     if (!ApplyActionOverrides(Error)) { ActionOverrides = Previous; return false; }
     SaveConfig();
     return true;
+}
+
+bool USPControlSettings::RebindGamepadAction(FName Action, FKey Key, FString& Error)
+{
+    if (!CanRebindAction(Action) || !Key.IsValid() || !Key.IsGamepadKey() || !Key.IsBindableToActions())
+    {
+        Error = TEXT("Choose a supported controller button.");
+        return false;
+    }
+
+    FName Conflict;
+    if (FindGamepadActionUsingKey(Key, Action, Conflict))
+    {
+        Error = FString::Printf(TEXT("%s is already assigned to %s. Choose another controller button."),
+            *Key.GetDisplayName().ToString(), *Conflict.ToString());
+        return false;
+    }
+
+    const auto Previous = GamepadActionOverrides;
+    GamepadActionOverrides.RemoveAll([&](const FInputActionKeyMapping& Mapping) { return Mapping.ActionName == Action; });
+    GamepadActionOverrides.Add(FInputActionKeyMapping(Action, Key));
+    if (!ApplyActionOverrides(Error)) { GamepadActionOverrides = Previous; return false; }
+    SaveConfig();
+    return true;
+}
+
+bool USPControlSettings::FindGamepadActionUsingKey(FKey Key, FName ExcludingAction, FName& OutAction) const
+{
+    OutAction = NAME_None;
+    if (!Key.IsValid() || !Key.IsGamepadKey()) return false;
+    for (const auto& Mapping : GetDefault<UInputSettings>()->GetActionMappings())
+    {
+        if (Mapping.Key == Key && Mapping.Key.IsGamepadKey()
+            && Mapping.ActionName != ExcludingAction && CanRebindAction(Mapping.ActionName))
+        {
+            OutAction = Mapping.ActionName;
+            return true;
+        }
+    }
+    return false;
 }
 
 bool USPControlSettings::FindActionUsingKey(FKey Key, FName ExcludingAction, FName& OutAction) const
@@ -225,9 +299,18 @@ bool USPControlSettings::SetMovementKeys(const TArray<FKey>& Keys, FString& Erro
     return true;
 }
 
+void USPControlSettings::ResetGamepadBindings(bool bSaveSettings)
+{
+    GamepadActionOverrides.Reset();
+    FString Error;
+    ApplyActionOverrides(Error);
+    if (bSaveSettings) SaveConfig();
+}
+
 void USPControlSettings::ResetAllBindings(bool bSaveSettings)
 {
     ActionOverrides.Reset();
+    GamepadActionOverrides.Reset();
     MovementKeys.Reset();
     Install(OriginalMappings(), OriginalAxes());
     if (bSaveSettings) SaveConfig();
