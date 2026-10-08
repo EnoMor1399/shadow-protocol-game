@@ -40,11 +40,11 @@ The existing action and movement override system intentionally rewrites only key
 
 The native Controls panel now also provides saved controller action-button remapping for the supported combat/tactics actions. Controller overrides are stored separately from keyboard/mouse overrides. A controller rebind is rejected before mutation if the key is not a gamepad button, is used by movement/camera axes, or is already owned by another supported/default action. **Restore original controller buttons** clears only controller action overrides; look sensitivity, dead zone, inversion and keyboard/mouse mappings are preserved.
 
-Confirmed controller-button swaps are not implemented in this pass: an occupied button must first be freed or another button chosen. Platform-specific glyph switching and deeper platform navigation remain runtime work.
+Occupied supported controller buttons now enter an explicit **Confirm controller swap** state. Confirmation rechecks the current owner, requires exactly one gamepad mapping for each action, swaps the two buttons as one candidate, and rolls back the saved override set if full input validation fails. Changing the selected controller action, restoring bindings, or closing Controls clears pending confirmation. Platform-specific glyph switching and deeper platform navigation remain runtime work.
 
 ## CI contract
 
-`Backend/test/gamepad-controls-contract.mjs` now runs with the existing Unreal source-contract suite. It checks required stock controller mappings, dedicated right-stick look handlers, frame-time scaling, gameplay gating, independent sensitivity/ADS/inversion/dead-zone settings, safe clamping, native UI wiring, controller action override isolation/conflict rejection and preservation of keyboard/gamepad alternatives across resets.
+`Backend/test/gamepad-controls-contract.mjs` now runs with the existing Unreal source-contract suite. It checks required stock controller mappings, dedicated right-stick look handlers, frame-time scaling, gameplay gating, independent sensitivity/ADS/inversion/dead-zone settings, safe clamping, native UI wiring, controller action override isolation, confirmed atomic swaps with rollback/stale-owner protection, and preservation of keyboard/gamepad alternatives across resets.
 
 ## Runtime validation still required
 
