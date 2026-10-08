@@ -124,6 +124,34 @@ test('controller action remapping is isolated and conflict safe', async () => {
   assert.match(controls, /Original controller action buttons restored/);
 });
 
+test('confirmed controller swaps are atomic and rollback-safe', async () => {
+  const header = await source('../../Source/ShadowProtocol/Public/SPControlSettings.h');
+  const settings = await source('../../Source/ShadowProtocol/Private/SPControlSettings.cpp');
+  const widgetHeader = await source('../../Source/ShadowProtocol/Public/SPControlsWidget.h');
+  const controls = await source('../../Source/ShadowProtocol/Private/SPControlsWidget.cpp');
+
+  assert.match(header, /SwapGamepadActionBinding/);
+  assert.match(settings, /SwapGamepadActionBinding/);
+  assert.match(settings, /FindGamepadActionUsingKey\(NewKey, Action, CurrentOwner\)/);
+  assert.match(settings, /CurrentOwner != ConflictingAction/);
+  assert.match(settings, /ActionKeyCount != 1 \|\| ConflictKeyCount != 1/);
+  assert.match(settings, /const auto PreviousOverrides = GamepadActionOverrides/);
+  assert.match(settings, /GamepadActionOverrides\.RemoveAll/);
+  assert.match(settings, /GamepadActionOverrides\.Add\(FInputActionKeyMapping\(Action, NewKey\)\)/);
+  assert.match(settings, /GamepadActionOverrides\.Add\(FInputActionKeyMapping\(ConflictingAction, PreviousActionKey\)\)/);
+  assert.match(settings, /GamepadActionOverrides = PreviousOverrides/);
+
+  assert.match(widgetHeader, /PendingGamepadSwapAction/);
+  assert.match(widgetHeader, /PendingGamepadConflictAction/);
+  assert.match(widgetHeader, /ConfirmPendingGamepadSwap/);
+  assert.match(widgetHeader, /ClearPendingGamepadSwap/);
+  assert.match(controls, /Confirm controller swap/);
+  assert.match(controls, /ConfirmPendingGamepadSwap/);
+  assert.match(controls, /SwapGamepadActionBinding/);
+  assert.match(controls, /ClearPendingGamepadSwap\(\)/);
+  assert.match(controls, /controller buttons swapped and saved/);
+});
+
 test('native UI exposes controller shortcuts while keeping keyboard and controller remapping separate', async () => {
   const settings = await source('../../Source/ShadowProtocol/Private/SPControlSettings.cpp');
   const hud = await source('../../Source/ShadowProtocol/Private/SPCombatHUD.cpp');
