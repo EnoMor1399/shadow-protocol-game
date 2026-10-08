@@ -34,6 +34,17 @@ EOS token verification is provided by the EOS SDK. The Node gateway therefore de
 
 That service must use `EOS_Auth_VerifyIdToken` or `EOS_Connect_VerifyIdToken` and return a subject only after an EOS success result. The gateway fails closed when the verifier is unavailable or metadata does not match.
 
+## Abuse controls
+
+The gateway applies two bounded in-memory fixed-window limits before provider verification:
+
+- source IP attempts;
+- HMAC-fingerprinted provider credential attempts.
+
+Raw provider tokens are never stored by the limiter. Defaults are 30 IP attempts and 5 attempts per provider credential in a 60-second window. These controls are intentionally local to one process. A multi-instance deployment should also enforce distributed rate limiting at the ingress/WAF or a shared store.
+
+The gateway disables Fastify request logging and redacts authorization, provider-token and device-nonce fields. Provider verification failures return generic client errors instead of forwarding provider response bodies.
+
 ## Local commands
 
 ```bash
