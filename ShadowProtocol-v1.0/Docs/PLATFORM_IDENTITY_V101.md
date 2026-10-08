@@ -85,6 +85,20 @@ bAttemptAutoLogin=true
 
 Shipping builds reject non-HTTPS gateway URLs. Steam/EOS plugin credentials and provider SDK configuration remain platform/deployment configuration and are not embedded in this source-level bridge.
 
+## Trusted gateway implementation
+
+A deployable Node/TypeScript gateway now lives in `IdentityGateway/`.
+
+- `src/providers.ts` contains the provider-verification boundary.
+- Steam verification calls the server-only Steamworks `ISteamUserAuth/AuthenticateUserTicket/v1/` endpoint with publisher key, app id and Web API identity.
+- EOS verification fails closed unless an HTTPS, server-controlled verifier is configured. That verifier must use EOS SDK `EOS_Auth_VerifyIdToken` or `EOS_Connect_VerifyIdToken` and return a subject only after EOS success.
+- `src/assertion.ts` signs backend-compatible HMAC assertions with a 30–120 second bounded lifetime and nonce hash.
+- `src/limiter.ts` rate-limits source IPs and HMAC-fingerprinted provider credentials without retaining raw tokens.
+- `src/server.ts` exposes only `GET /health` and `POST /v1/platform-ticket`, rejects unaccepted network builds before provider verification and returns generic verification errors.
+- CI independently typechecks and unit-tests the gateway.
+
+The in-process limiter is a defense-in-depth layer, not a distributed abuse-control system. Production multi-instance deployments must add shared ingress/WAF or datastore-backed rate limiting.
+
 ## Backend policy
 
 Production defaults the legacy raw-user bootstrap route off:
