@@ -69,6 +69,16 @@ test('gateway assertion is handed to the existing backend assertion exchange', a
   assert.doesNotMatch(backend, /SetStringField\(TEXT\("authToken"\)/);
 });
 
+test('signed platform assertions are cryptographically bound to the exchanged device nonce', async () => {
+  const server = await source('../src/server.ts');
+
+  assert.match(server, /deviceNonceHash:string/);
+  assert.match(server, /deviceNonceHash:z\.string\(\)\.length\(64\)/);
+  assert.match(server, /expectedNonceHash=sha256\(parsed\.data\.deviceNonce\)/);
+  assert.match(server, /timingSafeEqual\(suppliedNonceHash,expectedNonceBytes\)/);
+  assert.match(server, /platform-identity-nonce-mismatch/);
+});
+
 test('default project config keeps provider gateway unset and NULL only as local OSS baseline', async () => {
   const ini = await source('../../Config/DefaultEngine.ini');
 
