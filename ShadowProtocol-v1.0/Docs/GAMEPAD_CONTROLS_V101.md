@@ -42,6 +42,12 @@ The native Controls panel now also provides saved controller action-button remap
 
 Occupied supported controller buttons now enter an explicit **Confirm controller swap** state. Confirmation rechecks the current owner, requires exactly one gamepad mapping for each action, swaps the two buttons as one candidate, and rolls back the saved override set if full input validation fails. Changing the selected controller action, restoring bindings, or closing Controls clears pending confirmation. Platform-specific glyph switching and deeper platform navigation remain runtime work.
 
+## Cross-platform text labels
+
+Controller help text now routes through a shared key-label formatter. Common gamepad inputs use platform-neutral dual names such as `A / Cross`, `X / Square`, `RT / R2`, `LB / L1`, `View / Share` and `Menu / Options`. HUD prompts, live binding lists and controller-conflict feedback therefore avoid exposing Unreal's internal key identifiers.
+
+This is a text-label compatibility layer, not runtime device detection or icon/glyph switching. Automatic Xbox/PlayStation glyph packs remain pending packaged-device work.
+
 ## CI contract
 
 `Backend/test/gamepad-controls-contract.mjs` now runs with the existing Unreal source-contract suite. It checks required stock controller mappings, dedicated right-stick look handlers, frame-time scaling, gameplay gating, independent sensitivity/ADS/inversion/dead-zone settings, safe clamping, native UI wiring, controller action override isolation, confirmed atomic swaps with rollback/stale-owner protection, and preservation of keyboard/gamepad alternatives across resets.
