@@ -67,10 +67,17 @@ private:
     UPROPERTY(Transient) TObjectPtr<UComboBoxString> GamepadBindingAction;
     UPROPERTY(Transient) TObjectPtr<UInputKeySelector> GamepadBindingKey;
     UPROPERTY(Transient) TObjectPtr<UTextBlock> GamepadBindingFeedback;
+    UPROPERTY(Transient) TObjectPtr<UButton> ConfirmGamepadSwapButton;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> ConfirmGamepadSwapText;
+    FName PendingGamepadSwapAction = NAME_None;
+    FName PendingGamepadConflictAction = NAME_None;
+    FKey PendingGamepadSwapKey;
     bool bSynchronizingGamepadBinding = false;
     void RefreshGamepadBinding();
+    void ClearPendingGamepadSwap();
     UFUNCTION() void ChooseGamepadBindingAction(FString Selection, ESelectInfo::Type SelectionType);
     UFUNCTION() void CaptureGamepadBinding(FInputChord Chord);
+    UFUNCTION() void ConfirmPendingGamepadSwap();
     UFUNCTION() void ResetGamepadBindings();
     UPROPERTY(Transient) TObjectPtr<UButton> ConfirmSwapButton;
     UPROPERTY(Transient) TObjectPtr<UTextBlock> ConfirmSwapText;
