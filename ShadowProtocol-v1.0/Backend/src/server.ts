@@ -76,7 +76,7 @@ const b64url=(value:string|Buffer)=>Buffer.from(value).toString('base64url');
 const sha256=(value:string)=>createHash('sha256').update(value).digest('hex');
 type SessionPayload={sid:string;uid:string;exp:number;region:string;build:string;protocol:string};
 type PlatformIdentityAssertionPayload={
-  jti:string;iss:string;aud:string;iat:number;exp:number;provider:string;subject:string;region:string;build:string;
+  jti:string;iss:string;aud:string;iat:number;exp:number;provider:string;subject:string;region:string;build:string;deviceNonceHash:string;
 };
 type ServerAttestationPayload={
   jti:string;iss:string;aud:string;iat:number;exp:number;serverId:string;region:string;networkBuild:string;
@@ -105,7 +105,8 @@ const platformIdentityAssertionSchema=z.object({
   jti:z.string().uuid(),iss:z.literal(PLATFORM_IDENTITY_ISSUER),aud:z.literal(PLATFORM_IDENTITY_AUDIENCE),
   iat:z.number().int().positive(),exp:z.number().int().positive(),
   provider:z.string().min(2).max(32).regex(/^[a-z0-9][a-z0-9._-]*$/),
-  subject:z.string().min(1).max(256),region:z.string().min(2).max(16),build:z.string().min(2).max(32)
+  subject:z.string().min(1).max(256),region:z.string().min(2).max(16),build:z.string().min(2).max(32),
+  deviceNonceHash:z.string().length(64).regex(/^[a-f0-9]{64}$/)
 });
 function verifyPlatformIdentityAssertion(token:string):PlatformIdentityAssertionPayload|null{
   if(!token||!PLATFORM_IDENTITY_ASSERTION_SECRET)return null;
@@ -438,6 +439,11 @@ app.post('/v1/auth/platform-session',async(req,reply)=>{
   const assertion=verifyPlatformIdentityAssertion(parsed.data.assertion);
   if(!assertion)return reply.code(401).send({error:'platform-identity-assertion-invalid'});
   if(!isBuildCompatible(assertion.build))return incompatibleBuild(reply,assertion.build);
+  const expectedNonceHash=sha256(parsed.data.deviceNonce);
+  const suppliedNonceHash=Buffer.from(assertion.deviceNonceHash,'hex');
+  const expectedNonceBytes=Buffer.from(expectedNonceHash,'hex');
+  if(suppliedNonceHash.length!==expectedNonceBytes.length||!timingSafeEqual(suppliedNonceHash,expectedNonceBytes))
+    return reply.code(401).send({error:'platform-identity-nonce-mismatch'});
 
   const subjectHash=sha256(`${assertion.provider}:${assertion.subject}`);
   const sessionId=crypto.randomUUID(),expiresAt=Date.now()+SESSION_TTL_MS;
