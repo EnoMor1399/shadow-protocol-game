@@ -152,6 +152,30 @@ test('confirmed controller swaps are atomic and rollback-safe', async () => {
   assert.match(controls, /controller buttons swapped and saved/);
 });
 
+test('controller labels are platform neutral text rather than raw Unreal key names', async () => {
+  const header = await source('../../Source/ShadowProtocol/Public/SPControlSettings.h');
+  const settings = await source('../../Source/ShadowProtocol/Private/SPControlSettings.cpp');
+  const controls = await source('../../Source/ShadowProtocol/Private/SPControlsWidget.cpp');
+
+  assert.match(header, /GetKeyDisplayLabel/);
+  for (const label of [
+    'A / Cross',
+    'B / Circle',
+    'X / Square',
+    'Y / Triangle',
+    'LT / L2',
+    'RT / R2',
+    'LB / L1',
+    'RB / R1',
+    'View / Share',
+    'Menu / Options'
+  ]) assert.ok(settings.includes(label));
+
+  assert.match(settings, /GetActionKeyLabel[\s\S]*GetKeyDisplayLabel\(Mapping\.Key\)/);
+  assert.match(controls, /GetKeyDisplayLabel\(Mapping\.Key\)/);
+  assert.match(controls, /GetKeyDisplayLabel\(Chord\.Key\)/);
+});
+
 test('native UI exposes controller shortcuts while keeping keyboard and controller remapping separate', async () => {
   const settings = await source('../../Source/ShadowProtocol/Private/SPControlSettings.cpp');
   const hud = await source('../../Source/ShadowProtocol/Private/SPCombatHUD.cpp');
