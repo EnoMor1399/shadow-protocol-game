@@ -28,6 +28,18 @@ private:
     UPROPERTY(Transient) TObjectPtr<UCheckBox> InvertCheck;
     UPROPERTY(Transient) TObjectPtr<UCheckBox> ToggleAimCheck;
     UFUNCTION() void SetToggleAim(bool bEnabled);
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> GamepadSensitivityLabel;
+    UPROPERTY(Transient) TObjectPtr<USlider> GamepadSensitivitySlider;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> GamepadAimSensitivityLabel;
+    UPROPERTY(Transient) TObjectPtr<USlider> GamepadAimSensitivitySlider;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> GamepadDeadZoneLabel;
+    UPROPERTY(Transient) TObjectPtr<USlider> GamepadDeadZoneSlider;
+    UPROPERTY(Transient) TObjectPtr<UCheckBox> GamepadInvertCheck;
+    UFUNCTION() void SetGamepadSensitivity(float Value);
+    UFUNCTION() void SetGamepadAimSensitivity(float Value);
+    UFUNCTION() void SetGamepadDeadZone(float Value);
+    UFUNCTION() void SetGamepadInvert(bool bEnabled);
+    UFUNCTION() void ResetGamepadDefaults();
     UPROPERTY(Transient) TObjectPtr<UButton> ResumeButton;
     UPROPERTY(Transient) TObjectPtr<UCheckBox> ContrastCheck;
     UPROPERTY(Transient) TObjectPtr<UCheckBox> CrosshairCheck;
