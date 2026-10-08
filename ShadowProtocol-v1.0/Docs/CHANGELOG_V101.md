@@ -381,6 +381,17 @@ Confirmed swaps now require exactly one unmodified keyboard/mouse binding per ac
 - Consolidate stale UI/control documentation. Local source contracts cover wiring; UE5.6 build, automation and packaged-client input/render checks remain pending.
 
 
+### Trusted identity gateway service
+
+- Add a standalone `IdentityGateway/` Node/TypeScript service with independent CI.
+- Implement server-side Steam `AuthenticateUserTicket` verification using publisher credentials held only by the gateway.
+- Add a fail-closed EOS verifier-adapter contract for server-side `EOS_Auth_VerifyIdToken` / `EOS_Connect_VerifyIdToken` execution.
+- Sign only verified provider subjects into short-lived backend-compatible assertions.
+- Reject unaccepted network builds before provider verification.
+- Add bounded source-IP and HMAC-fingerprinted provider-credential rate limits without retaining raw provider tokens.
+- Disable request logging and redact authorization, provider token and device nonce fields.
+- Add unit and HTTP-route tests for assertion signing, provider verification, metadata checks and rate limiting.
+
 ### Trusted platform identity bootstrap
 
 - Add `USPPlatformIdentitySubsystem` as a world/provider-aware Unreal bridge from authenticated Steam/EOS OnlineSubsystem identity to the trusted identity gateway.
