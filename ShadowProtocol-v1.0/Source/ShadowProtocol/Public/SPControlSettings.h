@@ -14,6 +14,14 @@ public:
     UPROPERTY(Config) float AimSensitivityMultiplier = 1.f;
     float GetSafeAimSensitivityMultiplier() const;
     UPROPERTY(Config) bool bInvertMouseY = false;
+    UPROPERTY(Config) float GamepadLookSensitivity = 1.f;
+    UPROPERTY(Config) float GamepadAimSensitivityMultiplier = 0.75f;
+    UPROPERTY(Config) float GamepadDeadZone = 0.18f;
+    UPROPERTY(Config) bool bInvertGamepadY = false;
+    float GetSafeGamepadLookSensitivity() const;
+    float GetSafeGamepadAimSensitivityMultiplier() const;
+    float GetSafeGamepadDeadZone() const;
+    float ApplyGamepadDeadZone(float Value) const;
     UPROPERTY(Config) bool bToggleAim = false;
     UPROPERTY(Config) bool bHighContrastHUD = false;
     UPROPERTY(Config) bool bShowCrosshair = true;
