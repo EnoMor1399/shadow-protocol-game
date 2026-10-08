@@ -451,7 +451,7 @@ void USPControlsWidget::RefreshBindings()
                 if (Mapping.bAlt) Key += TEXT("Alt+");
                 if (Mapping.bShift) Key += TEXT("Shift+");
                 if (Mapping.bCmd) Key += TEXT("Cmd+");
-                Key += Mapping.Key.GetDisplayName().ToString();
+                Key += USPControlSettings::GetKeyDisplayLabel(Mapping.Key);
                 Keys += (Keys.IsEmpty() ? TEXT("") : TEXT(" / ")) + Key;
                 if (Selected && Mapping.ActionName == *Selected && !Mapping.Key.IsGamepadKey())
                     Current = FInputChord(Mapping.Key, Mapping.bShift, Mapping.bCtrl, Mapping.bAlt, Mapping.bCmd);
