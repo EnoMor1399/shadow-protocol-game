@@ -91,7 +91,33 @@ test('keyboard override machinery preserves controller mappings', async () => {
   assert.match(cpp, /if \(Mapping\.Key\.IsGamepadKey\(\)\) continue/);
 });
 
-test('native UI exposes controller shortcuts without enabling gamepad rebinding', async () => {
+test('controller action remapping is isolated and conflict safe', async () => {
+  const header = await source('../../Source/ShadowProtocol/Public/SPControlSettings.h');
+  const settings = await source('../../Source/ShadowProtocol/Private/SPControlSettings.cpp');
+  const controls = await source('../../Source/ShadowProtocol/Private/SPControlsWidget.cpp');
+
+  assert.match(header, /GamepadActionOverrides/);
+  assert.match(header, /RebindGamepadAction/);
+  assert.match(header, /FindGamepadActionUsingKey/);
+  assert.match(header, /ResetGamepadBindings/);
+
+  assert.match(settings, /GamepadSeen/);
+  assert.match(settings, /Mapping\.Key\.IsGamepadKey\(\)/);
+  assert.match(settings, /controller input is used by movement or camera look/);
+  assert.match(settings, /FindGamepadActionUsingKey\(Key, Action, Conflict\)/);
+  assert.match(settings, /GamepadActionOverrides = Previous/);
+  assert.match(settings, /ResetGamepadBindings/);
+  assert.match(settings, /GamepadActionOverrides\.Reset\(\)/);
+
+  assert.match(controls, /CONTROLLER ACTION BUTTONS/);
+  assert.match(controls, /SetAllowGamepadKeys\(true\)/);
+  assert.match(controls, /CaptureGamepadBinding/);
+  assert.match(controls, /RebindGamepadAction/);
+  assert.match(controls, /Restore original controller buttons/);
+  assert.match(controls, /Original controller action buttons restored/);
+});
+
+test('native UI exposes controller shortcuts while keeping keyboard and controller remapping separate', async () => {
   const settings = await source('../../Source/ShadowProtocol/Private/SPControlSettings.cpp');
   const hud = await source('../../Source/ShadowProtocol/Private/SPCombatHUD.cpp');
   const controls = await source('../../Source/ShadowProtocol/Private/SPControlsWidget.cpp');
@@ -105,4 +131,5 @@ test('native UI exposes controller shortcuts without enabling gamepad rebinding'
   assert.match(readyRoom, /EKeys::Gamepad_Special_Right/);
   assert.match(readyRoom, /Controls & input settings/);
   assert.match(controls, /SetAllowGamepadKeys\(false\)/);
+  assert.match(controls, /SetAllowGamepadKeys\(true\)/);
 });
