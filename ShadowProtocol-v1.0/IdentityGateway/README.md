@@ -51,7 +51,17 @@ The gateway disables Fastify request logging and redacts authorization, provider
 npm install
 npm run typecheck
 npm test
+npm run build
 npm start
 ```
+
+For container deployment:
+
+```bash
+docker build -t shadow-protocol-identity-gateway .
+docker run --rm -p 8090:8090 --env-file .env shadow-protocol-identity-gateway
+```
+
+The runtime image runs as the unprivileged Node user and includes an HTTP health check.
 
 Copy `.env.example` into your secret-management/deployment system. Do not commit populated secrets.
