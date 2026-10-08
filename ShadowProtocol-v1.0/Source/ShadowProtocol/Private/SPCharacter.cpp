@@ -69,22 +69,24 @@ void ASPCharacter::Turn(float V){ if(!CanUseLocalControls()) return; const auto*
 void ASPCharacter::LookUp(float V){ if(!CanUseLocalControls()) return; const auto* PC=Cast<ASPObserverPlayerController>(GetController()); AddControllerPitchInput(V*(PC?PC->GetMouseSensitivity():1.f)*(bAiming?GetDefault<USPControlSettings>()->GetSafeAimSensitivityMultiplier():1.f)*(PC && PC->IsMouseYInverted()?-1.f:1.f)); }
 void ASPCharacter::TurnGamepad(float V)
 {
-    if (!CanUseLocalControls() || !FMath::IsFinite(V) || FMath::IsNearlyZero(V)) return;
-    const auto* PC = Cast<ASPObserverPlayerController>(GetController());
-    const float Sensitivity = PC ? PC->GetMouseSensitivity() : 1.f;
-    const float AimScale = bAiming ? GetDefault<USPControlSettings>()->GetSafeAimSensitivityMultiplier() : 1.f;
+    if (!CanUseLocalControls()) return;
+    const auto* Settings = GetDefault<USPControlSettings>();
+    const float Filtered = Settings->ApplyGamepadDeadZone(V);
+    if (FMath::IsNearlyZero(Filtered)) return;
+    const float AimScale = bAiming ? Settings->GetSafeGamepadAimSensitivityMultiplier() : 1.f;
     const float DeltaSeconds = GetWorld() ? GetWorld()->GetDeltaSeconds() : 0.f;
-    AddControllerYawInput(V * 90.f * Sensitivity * AimScale * DeltaSeconds);
+    AddControllerYawInput(Filtered * 90.f * Settings->GetSafeGamepadLookSensitivity() * AimScale * DeltaSeconds);
 }
 void ASPCharacter::LookUpGamepad(float V)
 {
-    if (!CanUseLocalControls() || !FMath::IsFinite(V) || FMath::IsNearlyZero(V)) return;
-    const auto* PC = Cast<ASPObserverPlayerController>(GetController());
-    const float Sensitivity = PC ? PC->GetMouseSensitivity() : 1.f;
-    const float AimScale = bAiming ? GetDefault<USPControlSettings>()->GetSafeAimSensitivityMultiplier() : 1.f;
-    const float Invert = PC && PC->IsMouseYInverted() ? -1.f : 1.f;
+    if (!CanUseLocalControls()) return;
+    const auto* Settings = GetDefault<USPControlSettings>();
+    const float Filtered = Settings->ApplyGamepadDeadZone(V);
+    if (FMath::IsNearlyZero(Filtered)) return;
+    const float AimScale = bAiming ? Settings->GetSafeGamepadAimSensitivityMultiplier() : 1.f;
+    const float Invert = Settings->bInvertGamepadY ? -1.f : 1.f;
     const float DeltaSeconds = GetWorld() ? GetWorld()->GetDeltaSeconds() : 0.f;
-    AddControllerPitchInput(V * 75.f * Sensitivity * AimScale * Invert * DeltaSeconds);
+    AddControllerPitchInput(Filtered * 75.f * Settings->GetSafeGamepadLookSensitivity() * AimScale * Invert * DeltaSeconds);
 }
 void ASPCharacter::Fire(){ if(!CanUseLocalControls()) return; const AGameStateBase* GS=GetWorld()?GetWorld()->GetGameState():nullptr; const float ShotTime=GS?GS->GetServerWorldTimeSeconds():(GetWorld()?GetWorld()->GetTimeSeconds():0.f); ServerFire(ShotTime); }
 void ASPCharacter::Reload(){ if(!CanUseLocalControls()) return; ServerReload(); }
