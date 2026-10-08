@@ -205,7 +205,23 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
             BindingLabels.Add(FName(Hint.Mapping), Label(FString::Printf(TEXT("%s   %s"), Hint.Label, Keys.IsEmpty() ? TEXT("Unbound") : *Keys), 16, FLinearColor::White));
         }
         Label(TEXT("Crouch, sprint and lean are hold controls. Aim uses your hold/toggle preference. Release and press again after closing a menu."), 16, FLinearColor::White);
+        Label(TEXT("CONTROLLER ACTION BUTTONS"), 20, FLinearColor(0.35f, 0.85f, 0.8f));
+        Label(TEXT("Choose an action and press a controller button. Stick axes, Menu/Start and buttons already owned by another action are rejected without changing the live mapping."), 16, FLinearColor::White);
+        GamepadBindingAction = WidgetTree->ConstructWidget<UComboBoxString>();
+        GamepadBindingAction->OnSelectionChanged.AddUniqueDynamic(this, &USPControlsWidget::ChooseGamepadBindingAction);
+        Column->AddChildToVerticalBox(GamepadBindingAction)->SetPadding(FMargin(0, 8));
+        for (int32 Index = 0; Index < BindingAction->GetOptionCount(); ++Index)
+            GamepadBindingAction->AddOption(BindingAction->GetOptionAtIndex(Index));
+        GamepadBindingKey = WidgetTree->ConstructWidget<UInputKeySelector>();
+        GamepadBindingKey->SetAllowGamepadKeys(true);
+        GamepadBindingKey->SetAllowModifierKeys(false);
+        GamepadBindingKey->SetEscapeKeys(TArray<FKey>{EKeys::Escape});
+        GamepadBindingKey->OnKeySelected.AddUniqueDynamic(this, &USPControlsWidget::CaptureGamepadBinding);
+        Column->AddChildToVerticalBox(GamepadBindingKey)->SetPadding(FMargin(0, 8));
+        GamepadBindingFeedback = Label(TEXT("Controller remapping changes controller buttons only; keyboard/mouse bindings are preserved."), 16, FLinearColor::White);
+        Button(TEXT("Restore original controller buttons"))->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ResetGamepadBindings);
         BindingAction->SetSelectedIndex(0);
+        GamepadBindingAction->SetSelectedIndex(0);
         WidgetTree->RootWidget = Backdrop;
     }
     return Super::RebuildWidget();
@@ -242,6 +258,7 @@ void USPControlsWidget::NativeConstruct()
             BindingFeedback->SetText(FText::FromString(TEXT("Saved bindings could not be applied. Restore original bindings to recover. ") + BindingError));
         RefreshBindings();
         RefreshMovementKeys();
+        RefreshGamepadBinding();
     }
 }
 
@@ -274,6 +291,8 @@ FReply USPControlsWidget::NativeOnPreviewKeyDown(const FGeometry& Geometry, cons
     {
         if (BindingKey && BindingKey->GetIsSelectingKey())
             return Super::NativeOnPreviewKeyDown(Geometry, Event); // let the selector cancel capture
+        if (GamepadBindingKey && GamepadBindingKey->GetIsSelectingKey())
+            return Super::NativeOnPreviewKeyDown(Geometry, Event);
         for (const auto& Selector : MovementSelectors)
             if (Selector && Selector->GetIsSelectingKey())
                 return Super::NativeOnPreviewKeyDown(Geometry, Event);
@@ -287,6 +306,61 @@ void USPControlsWidget::ChooseBindingAction(FString Selection, ESelectInfo::Type
 {
     ClearPendingSwap();
     RefreshBindings();
+}
+
+void USPControlsWidget::ChooseGamepadBindingAction(FString Selection, ESelectInfo::Type SelectionType)
+{
+    RefreshGamepadBinding();
+}
+
+void USPControlsWidget::RefreshGamepadBinding()
+{
+    if (!GamepadBindingAction || !GamepadBindingKey) return;
+    bSynchronizingGamepadBinding = true;
+    const FName* Selected = ActionNames.Find(GamepadBindingAction->GetSelectedOption());
+    FInputChord Current;
+    if (Selected)
+    {
+        for (const auto& Mapping : GetDefault<UInputSettings>()->GetActionMappings())
+            if (Mapping.ActionName == *Selected && Mapping.Key.IsGamepadKey())
+            {
+                Current = FInputChord(Mapping.Key);
+                break;
+            }
+    }
+    GamepadBindingKey->SetIsEnabled(Selected != nullptr);
+    GamepadBindingKey->SetSelectedKey(Current);
+    bSynchronizingGamepadBinding = false;
+}
+
+void USPControlsWidget::CaptureGamepadBinding(FInputChord Chord)
+{
+    if (bSynchronizingGamepadBinding) return;
+    const FName* Action = ActionNames.Find(GamepadBindingAction ? GamepadBindingAction->GetSelectedOption() : FString());
+    FString Error;
+    if (!Action || Chord.bShift || Chord.bCtrl || Chord.bAlt || Chord.bCmd || !Chord.Key.IsGamepadKey())
+    {
+        Error = TEXT("Press one controller button. Keyboard, mouse, modifiers and stick axes are not accepted here.");
+    }
+    else
+    {
+        if (auto* PC = GetOwningPlayer<ASPObserverPlayerController>())
+            if (auto* Character = Cast<ASPCharacter>(PC->GetPawn())) Character->ReleaseHeldControls();
+        GetMutableDefault<USPControlSettings>()->RebindGamepadAction(*Action, Chord.Key, Error);
+    }
+    if (GamepadBindingFeedback)
+        GamepadBindingFeedback->SetText(FText::FromString(Error.IsEmpty() ? TEXT("Controller binding applied and saved.") : Error));
+    RefreshBindings();
+    RefreshGamepadBinding();
+}
+
+void USPControlsWidget::ResetGamepadBindings()
+{
+    GetMutableDefault<USPControlSettings>()->ResetGamepadBindings();
+    if (GamepadBindingFeedback)
+        GamepadBindingFeedback->SetText(FText::FromString(TEXT("Original controller action buttons restored. Controller tuning and keyboard/mouse bindings are unchanged.")));
+    RefreshBindings();
+    RefreshGamepadBinding();
 }
 
 void USPControlsWidget::RefreshBindings()
@@ -409,6 +483,7 @@ void USPControlsWidget::ResetBindings()
     BindingFeedback->SetText(FText::FromString(TEXT("Original movement and action keys restored. Mouse and HUD preferences unchanged.")));
     RefreshBindings();
     RefreshMovementKeys();
+    RefreshGamepadBinding();
 }
 
 void USPControlsWidget::SetHUDContrast(bool bEnabled)
