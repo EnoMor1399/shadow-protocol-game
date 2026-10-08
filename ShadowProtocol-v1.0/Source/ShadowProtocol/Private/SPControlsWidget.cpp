@@ -69,10 +69,10 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
         AimSensitivitySlider->SetStepSize(0.05f);
         AimSensitivitySlider->OnValueChanged.AddUniqueDynamic(this, &USPControlsWidget::SetAimSensitivity);
         Column->AddChildToVerticalBox(AimSensitivitySlider);
-        Label(TEXT("Aim sensitivity scales mouse and right-stick look while aiming. 1.00x keeps your normal sensitivity."), 16, FLinearColor::White);
+        Label(TEXT("Aim sensitivity scales mouse look while aiming. Controller ADS sensitivity is configured separately below."), 16, FLinearColor::White);
         InvertCheck = WidgetTree->ConstructWidget<UCheckBox>();
         auto* InvertLabel = WidgetTree->ConstructWidget<UTextBlock>();
-        InvertLabel->SetText(FText::FromString(TEXT("Invert vertical look (mouse + controller)")));
+        InvertLabel->SetText(FText::FromString(TEXT("Invert vertical mouse look")));
         InvertCheck->SetContent(InvertLabel);
         InvertCheck->OnCheckStateChanged.AddUniqueDynamic(this, &USPControlsWidget::SetInvert);
         Column->AddChildToVerticalBox(InvertCheck)->SetPadding(FMargin(0, 12));
@@ -89,6 +89,27 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
         ToggleAimCheck->OnCheckStateChanged.AddUniqueDynamic(this, &USPControlsWidget::SetToggleAim);
         auto* Reset = Button(TEXT("Reset mouse settings"));
         Reset->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ResetDefaults);
+        Label(TEXT("CONTROLLER"), 20, FLinearColor(0.35f, 0.85f, 0.8f));
+        GamepadSensitivityLabel = Label(TEXT("Controller look sensitivity"), 18, FLinearColor::White);
+        GamepadSensitivitySlider = WidgetTree->ConstructWidget<USlider>();
+        GamepadSensitivitySlider->SetMinValue(0.25f); GamepadSensitivitySlider->SetMaxValue(3.f); GamepadSensitivitySlider->SetStepSize(0.05f);
+        GamepadSensitivitySlider->OnValueChanged.AddUniqueDynamic(this, &USPControlsWidget::SetGamepadSensitivity);
+        Column->AddChildToVerticalBox(GamepadSensitivitySlider)->SetPadding(FMargin(0, 4));
+        GamepadAimSensitivityLabel = Label(TEXT("Controller ADS sensitivity"), 18, FLinearColor::White);
+        GamepadAimSensitivitySlider = WidgetTree->ConstructWidget<USlider>();
+        GamepadAimSensitivitySlider->SetMinValue(0.1f); GamepadAimSensitivitySlider->SetMaxValue(1.f); GamepadAimSensitivitySlider->SetStepSize(0.05f);
+        GamepadAimSensitivitySlider->OnValueChanged.AddUniqueDynamic(this, &USPControlsWidget::SetGamepadAimSensitivity);
+        Column->AddChildToVerticalBox(GamepadAimSensitivitySlider)->SetPadding(FMargin(0, 4));
+        GamepadDeadZoneLabel = Label(TEXT("Right-stick dead zone"), 18, FLinearColor::White);
+        GamepadDeadZoneSlider = WidgetTree->ConstructWidget<USlider>();
+        GamepadDeadZoneSlider->SetMinValue(0.05f); GamepadDeadZoneSlider->SetMaxValue(0.5f); GamepadDeadZoneSlider->SetStepSize(0.01f);
+        GamepadDeadZoneSlider->OnValueChanged.AddUniqueDynamic(this, &USPControlsWidget::SetGamepadDeadZone);
+        Column->AddChildToVerticalBox(GamepadDeadZoneSlider)->SetPadding(FMargin(0, 4));
+        GamepadInvertCheck = Check(TEXT("Invert vertical controller look"));
+        GamepadInvertCheck->OnCheckStateChanged.AddUniqueDynamic(this, &USPControlsWidget::SetGamepadInvert);
+        auto* ResetGamepad = Button(TEXT("Reset controller settings"));
+        ResetGamepad->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ResetGamepadDefaults);
+        Label(TEXT("Controller tuning affects right-stick camera input only. Keyboard/mouse bindings and sensitivity are unchanged."), 16, FLinearColor::White);
         Label(TEXT("HUD READABILITY"), 20, FLinearColor(0.35f, 0.85f, 0.8f));
         ContrastCheck = Check(TEXT("High-contrast combat HUD"));
         ContrastCheck->OnCheckStateChanged.AddUniqueDynamic(this, &USPControlsWidget::SetHUDContrast);
@@ -194,6 +215,13 @@ void USPControlsWidget::NativeConstruct()
 {
     Super::NativeConstruct();
     const auto* HUDSettings = GetDefault<USPControlSettings>();
+    GamepadSensitivitySlider->SetValue(HUDSettings->GetSafeGamepadLookSensitivity());
+    SetGamepadSensitivity(HUDSettings->GetSafeGamepadLookSensitivity());
+    GamepadAimSensitivitySlider->SetValue(HUDSettings->GetSafeGamepadAimSensitivityMultiplier());
+    SetGamepadAimSensitivity(HUDSettings->GetSafeGamepadAimSensitivityMultiplier());
+    GamepadDeadZoneSlider->SetValue(HUDSettings->GetSafeGamepadDeadZone());
+    SetGamepadDeadZone(HUDSettings->GetSafeGamepadDeadZone());
+    GamepadInvertCheck->SetIsChecked(HUDSettings->bInvertGamepadY);
     AimSensitivitySlider->SetValue(HUDSettings->GetSafeAimSensitivityMultiplier());
     SetAimSensitivity(HUDSettings->GetSafeAimSensitivityMultiplier());
     ToggleAimCheck->SetIsChecked(HUDSettings->bToggleAim);
@@ -429,6 +457,50 @@ void USPControlsWidget::SetAimSensitivity(float Value)
 void USPControlsWidget::SetToggleAim(bool bEnabled)
 {
     GetMutableDefault<USPControlSettings>()->bToggleAim = bEnabled;
+}
+
+void USPControlsWidget::SetGamepadSensitivity(float Value)
+{
+    auto* Settings = GetMutableDefault<USPControlSettings>();
+    Settings->GamepadLookSensitivity = Value;
+    Settings->GamepadLookSensitivity = Settings->GetSafeGamepadLookSensitivity();
+    if (GamepadSensitivityLabel) GamepadSensitivityLabel->SetText(FText::FromString(FString::Printf(
+        TEXT("Controller look sensitivity   %.2fx"), Settings->GamepadLookSensitivity)));
+}
+
+void USPControlsWidget::SetGamepadAimSensitivity(float Value)
+{
+    auto* Settings = GetMutableDefault<USPControlSettings>();
+    Settings->GamepadAimSensitivityMultiplier = Value;
+    Settings->GamepadAimSensitivityMultiplier = Settings->GetSafeGamepadAimSensitivityMultiplier();
+    if (GamepadAimSensitivityLabel) GamepadAimSensitivityLabel->SetText(FText::FromString(FString::Printf(
+        TEXT("Controller ADS sensitivity   %.2fx normal"), Settings->GamepadAimSensitivityMultiplier)));
+}
+
+void USPControlsWidget::SetGamepadDeadZone(float Value)
+{
+    auto* Settings = GetMutableDefault<USPControlSettings>();
+    Settings->GamepadDeadZone = Value;
+    Settings->GamepadDeadZone = Settings->GetSafeGamepadDeadZone();
+    if (GamepadDeadZoneLabel) GamepadDeadZoneLabel->SetText(FText::FromString(FString::Printf(
+        TEXT("Right-stick dead zone   %.0f%%"), Settings->GamepadDeadZone * 100.f)));
+}
+
+void USPControlsWidget::SetGamepadInvert(bool bEnabled)
+{
+    GetMutableDefault<USPControlSettings>()->bInvertGamepadY = bEnabled;
+}
+
+void USPControlsWidget::ResetGamepadDefaults()
+{
+    GamepadSensitivitySlider->SetValue(1.f);
+    GamepadAimSensitivitySlider->SetValue(0.75f);
+    GamepadDeadZoneSlider->SetValue(0.18f);
+    GamepadInvertCheck->SetIsChecked(false);
+    SetGamepadSensitivity(1.f);
+    SetGamepadAimSensitivity(0.75f);
+    SetGamepadDeadZone(0.18f);
+    SetGamepadInvert(false);
 }
 
 void USPControlsWidget::StageMovementKeys(const TArray<FKey>& Keys)
