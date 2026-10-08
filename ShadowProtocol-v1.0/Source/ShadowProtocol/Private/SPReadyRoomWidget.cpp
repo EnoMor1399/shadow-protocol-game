@@ -82,6 +82,16 @@ TSharedRef<SWidget> USPReadyRoomWidget::RebuildWidget()
     return Super::RebuildWidget();
 }
 
+void USPReadyRoomWidget::FocusPrimaryControl()
+{
+    if (ReadyButton && ReadyButton->GetIsEnabled())
+        ReadyButton->SetKeyboardFocus();
+    else if (SpawnChoice && SpawnChoice->GetIsEnabled())
+        SpawnChoice->SetKeyboardFocus();
+    else
+        SetKeyboardFocus();
+}
+
 void USPReadyRoomWidget::RefreshReadyRoom()
 {
     if (!StatusText || !ReadyButton || !ButtonText) return;
