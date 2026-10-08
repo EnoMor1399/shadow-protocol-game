@@ -30,6 +30,7 @@ public:
     UPROPERTY(Config) float CrosshairScale = 1.f;
     float GetSafeCrosshairScale() const;
     UPROPERTY(Config) TArray<FInputActionKeyMapping> ActionOverrides;
+    UPROPERTY(Config) TArray<FInputActionKeyMapping> GamepadActionOverrides;
     // Empty uses project defaults; otherwise forward, backward, left, right.
     UPROPERTY(Config) TArray<FKey> MovementKeys;
     bool SetMovementKeys(const TArray<FKey>& Keys, FString& Error, bool bSaveSettings = true);
@@ -38,6 +39,9 @@ public:
     bool RebindAction(FName Action, FKey Key, FString& Error);
     bool FindActionUsingKey(FKey Key, FName ExcludingAction, FName& OutAction) const;
     bool SwapActionBinding(FName Action, FName ConflictingAction, FKey NewKey, FString& Error, bool bSaveSettings = true);
+    bool RebindGamepadAction(FName Action, FKey Key, FString& Error);
+    bool FindGamepadActionUsingKey(FKey Key, FName ExcludingAction, FName& OutAction) const;
+    void ResetGamepadBindings(bool bSaveSettings = true);
     void ResetAllBindings(bool bSaveSettings = true);
     static FString GetActionKeyLabel(FName Action);
     static bool CanRebindAction(FName Action);
