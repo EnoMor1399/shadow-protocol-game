@@ -16,6 +16,7 @@ class SHADOWPROTOCOL_API USPControlsWidget : public UUserWidget
     GENERATED_BODY()
 public:
     virtual void NativeConstruct() override;
+    void FocusPrimaryControl();
 protected:
     virtual TSharedRef<SWidget> RebuildWidget() override;
     virtual FReply NativeOnPreviewKeyDown(const FGeometry& Geometry, const FKeyEvent& Event) override;
