@@ -336,6 +336,15 @@ Added saved toggle aiming (default off). First aim press enters aim, second exit
 Confirmed swaps now require exactly one unmodified keyboard/mouse binding per action. Multiple bindings and modifier chords are rejected before mutation, preserving both actions and saved overrides. Gamepad alternatives are excluded from this count and retained. Direct single-key reassignment remains an explicit replacement. The Unreal atomic-rebinding test now disables persistence for swaps and checks alternate keys on either action plus modifier-chord rejection. Engine test execution remains pending; source checks are not a substitute for Unreal automation.
 
 
+### Controller tuning continuation
+
+- Add separate persisted controller look sensitivity (0.25–3.00x) and ADS sensitivity (0.10–1.00x).
+- Add a configurable right-stick dead zone (5–50%) with renormalized post-dead-zone range.
+- Add controller-only vertical inversion, independent from mouse invert-Y.
+- Add a dedicated controller settings section and reset button in the native Controls panel.
+- Keep keyboard/mouse settings, action overrides and controller defaults isolated from one another.
+- Expand controller CI source contracts and runtime validation guidance.
+
 ### Expanded keyboard movement controls
 
 - Added a four-direction movement editor with WASD/arrow drafts, explicit Apply, discard and active-layout summary.
