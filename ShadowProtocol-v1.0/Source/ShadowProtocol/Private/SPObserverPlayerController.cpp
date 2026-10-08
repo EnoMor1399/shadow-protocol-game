@@ -225,6 +225,8 @@ void ASPObserverPlayerController::ApplyInterfaceInputMode()
         Mode.SetWidgetToFocus(Focus->TakeWidget());
         SetInputMode(Mode);
         Focus->SetKeyboardFocus();
+        if (bControlsOpen && ControlsWidget) ControlsWidget->FocusPrimaryControl();
+        else if (ReadyRoomWidget) ReadyRoomWidget->FocusPrimaryControl();
     }
     else SetInputMode(FInputModeGameOnly());
 }
