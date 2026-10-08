@@ -376,6 +376,29 @@ float USPControlSettings::GetSafeCrosshairScale() const
     return FMath::IsFinite(CrosshairScale) ? FMath::Clamp(CrosshairScale, 0.75f, 2.5f) : 1.f;
 }
 
+FString USPControlSettings::GetKeyDisplayLabel(FKey Key)
+{
+    if (Key == EKeys::Gamepad_FaceButton_Bottom) return TEXT("A / Cross");
+    if (Key == EKeys::Gamepad_FaceButton_Right) return TEXT("B / Circle");
+    if (Key == EKeys::Gamepad_FaceButton_Left) return TEXT("X / Square");
+    if (Key == EKeys::Gamepad_FaceButton_Top) return TEXT("Y / Triangle");
+    if (Key == EKeys::Gamepad_LeftTrigger) return TEXT("LT / L2");
+    if (Key == EKeys::Gamepad_RightTrigger) return TEXT("RT / R2");
+    if (Key == EKeys::Gamepad_LeftShoulder) return TEXT("LB / L1");
+    if (Key == EKeys::Gamepad_RightShoulder) return TEXT("RB / R1");
+    if (Key == EKeys::Gamepad_LeftThumbstick) return TEXT("L3");
+    if (Key == EKeys::Gamepad_RightThumbstick) return TEXT("R3");
+    if (Key == EKeys::Gamepad_Special_Left) return TEXT("View / Share");
+    if (Key == EKeys::Gamepad_Special_Right) return TEXT("Menu / Options");
+    if (Key == EKeys::Gamepad_DPad_Up) return TEXT("D-pad Up");
+    if (Key == EKeys::Gamepad_DPad_Down) return TEXT("D-pad Down");
+    if (Key == EKeys::Gamepad_DPad_Left) return TEXT("D-pad Left");
+    if (Key == EKeys::Gamepad_DPad_Right) return TEXT("D-pad Right");
+    if (Key == EKeys::Gamepad_LeftX || Key == EKeys::Gamepad_LeftY) return TEXT("Left Stick");
+    if (Key == EKeys::Gamepad_RightX || Key == EKeys::Gamepad_RightY) return TEXT("Right Stick");
+    return Key.GetDisplayName().ToString();
+}
+
 FString USPControlSettings::GetActionKeyLabel(FName Action)
 {
     FString Label;
@@ -387,7 +410,7 @@ FString USPControlSettings::GetActionKeyLabel(FName Action)
         if (Mapping.bAlt) Key += TEXT("Alt+");
         if (Mapping.bShift) Key += TEXT("Shift+");
         if (Mapping.bCmd) Key += TEXT("Cmd+");
-        Key += Mapping.Key.GetDisplayName().ToString();
+        Key += GetKeyDisplayLabel(Mapping.Key);
         if (!Label.IsEmpty()) Label += TEXT(" / ");
         Label += Key;
     }
