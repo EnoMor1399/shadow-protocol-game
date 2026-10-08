@@ -45,5 +45,6 @@ public:
     void ResetGamepadBindings(bool bSaveSettings = true);
     void ResetAllBindings(bool bSaveSettings = true);
     static FString GetActionKeyLabel(FName Action);
+    static FString GetKeyDisplayLabel(FKey Key);
     static bool CanRebindAction(FName Action);
 };
