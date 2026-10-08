@@ -59,6 +59,11 @@ export function buildServer() {
     }
   });
 
+  app.addHook('onSend', async (_request, reply, payload) => {
+    reply.header('x-content-type-options', 'nosniff');
+    return payload;
+  });
+
   app.get('/health', async () => ({
     ok: true,
     service: 'shadow-protocol-identity-gateway',
@@ -68,6 +73,8 @@ export function buildServer() {
   }));
 
   app.post('/v1/platform-ticket', async (request, reply) => {
+    reply.header('cache-control', 'no-store');
+    reply.header('pragma', 'no-cache');
     const parsed = ticketSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'invalid-platform-ticket-request' });
 
