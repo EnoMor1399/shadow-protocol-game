@@ -43,8 +43,44 @@ test('gamepad look is separated from mouse delta input and remains gameplay gate
   assert.match(cpp, /LookUpGamepad[\s\S]*CanUseLocalControls\(\)/);
   assert.match(cpp, /TurnGamepad[\s\S]*GetDeltaSeconds\(\)[\s\S]*AddControllerYawInput/);
   assert.match(cpp, /LookUpGamepad[\s\S]*GetDeltaSeconds\(\)[\s\S]*AddControllerPitchInput/);
-  assert.match(cpp, /TurnGamepad[\s\S]*GetSafeAimSensitivityMultiplier/);
-  assert.match(cpp, /LookUpGamepad[\s\S]*IsMouseYInverted/);
+  assert.match(cpp, /TurnGamepad[\s\S]*ApplyGamepadDeadZone/);
+  assert.match(cpp, /TurnGamepad[\s\S]*GetSafeGamepadLookSensitivity/);
+  assert.match(cpp, /TurnGamepad[\s\S]*GetSafeGamepadAimSensitivityMultiplier/);
+  assert.match(cpp, /LookUpGamepad[\s\S]*bInvertGamepadY/);
+  assert.doesNotMatch(cpp, /TurnGamepad[\s\S]*GetMouseSensitivity/);
+});
+
+test('controller tuning is persisted, bounded and independent from mouse settings', async () => {
+  const header = await source('../../Source/ShadowProtocol/Public/SPControlSettings.h');
+  const settings = await source('../../Source/ShadowProtocol/Private/SPControlSettings.cpp');
+  const controls = await source('../../Source/ShadowProtocol/Private/SPControlsWidget.cpp');
+
+  for (const name of [
+    'GamepadLookSensitivity',
+    'GamepadAimSensitivityMultiplier',
+    'GamepadDeadZone',
+    'bInvertGamepadY'
+  ]) assert.ok(header.includes(name));
+
+  assert.match(settings, /GetSafeGamepadLookSensitivity/);
+  assert.match(settings, /FMath::Clamp\(GamepadLookSensitivity, 0\.25f, 3\.f\)/);
+  assert.match(settings, /GetSafeGamepadAimSensitivityMultiplier/);
+  assert.match(settings, /FMath::Clamp\(GamepadAimSensitivityMultiplier, 0\.1f, 1\.f\)/);
+  assert.match(settings, /GetSafeGamepadDeadZone/);
+  assert.match(settings, /FMath::Clamp\(GamepadDeadZone, 0\.05f, 0\.5f\)/);
+  assert.match(settings, /ApplyGamepadDeadZone/);
+  assert.match(settings, /Magnitude <= DeadZone/);
+
+  assert.match(controls, /Controller look sensitivity/);
+  assert.match(controls, /Controller ADS sensitivity/);
+  assert.match(controls, /Right-stick dead zone/);
+  assert.match(controls, /Invert vertical controller look/);
+  assert.match(controls, /Reset controller settings/);
+  assert.match(controls, /SetGamepadSensitivity/);
+  assert.match(controls, /SetGamepadAimSensitivity/);
+  assert.match(controls, /SetGamepadDeadZone/);
+  assert.match(controls, /SetGamepadInvert/);
+  assert.match(controls, /GamepadAimSensitivitySlider->SetValue\(0\.75f\)/);
 });
 
 test('keyboard override machinery preserves controller mappings', async () => {
