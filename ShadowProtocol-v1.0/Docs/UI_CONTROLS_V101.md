@@ -12,7 +12,7 @@ Controls button. It refreshes at 10 Hz instead of reconstructing text each frame
 Admission/expiry/connection notices remain present. Readiness still goes through
 the existing owning-controller RPC and authoritative GameMode checks.
 
-Press Escape or controller Menu/Start in gameplay or the ready room to open controls. Either shortcut or Return to game closes it. Tab/UMG focus navigation remains available. Mouse and controller look now have separate native tuning: mouse sensitivity/invert-Y plus controller look sensitivity, ADS multiplier, right-stick dead zone and controller invert-Y. These preferences and HUD settings save to local GameUserSettings config on closing or controller teardown. The settings currently apply to the machine profile, not separate split-screen player profiles. Values are clamped and non-finite config values fall back safely. Separate reset buttons cover mouse, controller, HUD and all key bindings. Movement edits require Apply; action rebinding saves immediately. Details follow; platform-specific gamepad glyph switching and remapping remain pending. The control reference reads current input mappings,
+Press Escape or controller Menu/Start in gameplay or the ready room to open controls. Either shortcut or Return to game closes it. Tab/UMG focus navigation remains available. Mouse and controller look now have separate native tuning: mouse sensitivity/invert-Y plus controller look sensitivity, ADS multiplier, right-stick dead zone and controller invert-Y. These preferences and HUD settings save to local GameUserSettings config on closing or controller teardown. The settings currently apply to the machine profile, not separate split-screen player profiles. Values are clamped and non-finite config values fall back safely. Separate reset buttons cover mouse, controller tuning, controller action buttons, HUD and all key bindings. Movement edits require Apply; keyboard/mouse and controller action rebinding save immediately. Details follow; platform-specific gamepad glyph switching and confirmed controller-button swaps remain pending. The control reference reads current input mappings,
 and excludes config-only actions without native implementation.
 
 Opening/closing UI releases aim, sprint, crouch and both lean directions, then
@@ -83,8 +83,7 @@ closes the panel. Successful changes immediately refresh the displayed bindings.
 
 Rebinding supports one keyboard/mouse binding per supported action. It replaces
 that action's existing keyboard/mouse alternatives; gamepad mappings are retained.
-Movement keyboard bindings have a separate editor below. Menu controls, mouse-look
-axes, modifier combinations and gamepad remapping remain fixed. Movement/look axes, console keys, reserved navigation keys and
+Movement keyboard bindings have a separate editor below. Controller combat/tactics buttons have their own gamepad-only picker. Menu controls, mouse-look axes and modifier combinations remain fixed. Movement/look axes, console keys, reserved navigation keys and
 unsupported/config-only actions still fail closed without changing live mappings.
 
 When the selected key is already owned by another supported combat/tactics action,
@@ -181,6 +180,14 @@ Added saved toggle aiming (default off). First aim press enters aim, second exit
 
 Confirmed swaps now require exactly one unmodified keyboard/mouse binding per action. Multiple bindings and modifier chords are rejected before mutation, preserving both actions and saved overrides. Gamepad alternatives are excluded from this count and retained. Direct single-key reassignment remains an explicit replacement. The Unreal atomic-rebinding test now disables persistence for swaps and checks alternate keys on either action plus modifier-chord rejection. Engine test execution remains pending; source checks are not a substitute for Unreal automation.
 
+
+### Controller action remapping
+
+The Controls panel now has a separate controller-action picker for the same supported combat/tactics action set. Selecting a gamepad button updates only the controller mapping for that action. Keyboard/mouse alternatives remain untouched. Stick axes and any controller button already used by another mapping are rejected before the runtime input map or saved overrides change.
+
+Controller action overrides are persisted independently in GameUserSettings. **Restore original controller buttons** clears only those overrides and rebuilds the full candidate map while preserving controller sensitivity/dead-zone/inversion, keyboard/mouse action overrides and keyboard movement keys. The broader **Restore all original key bindings** still resets both keyboard/mouse and controller action overrides together.
+
+This pass deliberately rejects occupied controller buttons instead of performing an automatic swap. A confirmed two-button controller swap can be added after packaged-device validation. UE runtime checks should cover Xbox/PlayStation-compatible pads, trigger/button capture, occupied-button rejection, stick-axis rejection, restart persistence, independent resets and keyboard/controller coexistence.
 
 ### Controller sensitivity and dead zone
 
