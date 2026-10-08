@@ -12,13 +12,7 @@ Controls button. It refreshes at 10 Hz instead of reconstructing text each frame
 Admission/expiry/connection notices remain present. Readiness still goes through
 the existing owning-controller RPC and authoritative GameMode checks.
 
-Press Escape in gameplay or the ready room to open controls. Escape or Return to
-game closes it. Tab navigates UMG controls; sensitivity and invert-Y have native
-slider/checkbox controls. Mouse/HUD settings apply immediately and save to local
-GameUserSettings config on closing or controller teardown. The settings currently
-apply to the machine profile, not separate split-screen player profiles. Sensitivity
-is clamped to 0.25–3.0, including validation of invalid/non-finite config values.
-Separate reset buttons cover mouse, HUD, and all key bindings. Movement edits require Apply; action rebinding saves immediately. Details follow; gamepad navigation remains pending. The control reference reads current input mappings,
+Press Escape or controller Menu/Start in gameplay or the ready room to open controls. Either shortcut or Return to game closes it. Tab/UMG focus navigation remains available. Mouse and controller look now have separate native tuning: mouse sensitivity/invert-Y plus controller look sensitivity, ADS multiplier, right-stick dead zone and controller invert-Y. These preferences and HUD settings save to local GameUserSettings config on closing or controller teardown. The settings currently apply to the machine profile, not separate split-screen player profiles. Values are clamped and non-finite config values fall back safely. Separate reset buttons cover mouse, controller, HUD and all key bindings. Movement edits require Apply; action rebinding saves immediately. Details follow; platform-specific gamepad glyph switching and remapping remain pending. The control reference reads current input mappings,
 and excludes config-only actions without native implementation.
 
 Opening/closing UI releases aim, sprint, crouch and both lean directions, then
@@ -187,6 +181,12 @@ Added saved toggle aiming (default off). First aim press enters aim, second exit
 
 Confirmed swaps now require exactly one unmodified keyboard/mouse binding per action. Multiple bindings and modifier chords are rejected before mutation, preserving both actions and saved overrides. Gamepad alternatives are excluded from this count and retained. Direct single-key reassignment remains an explicit replacement. The Unreal atomic-rebinding test now disables persistence for swaps and checks alternate keys on either action plus modifier-chord rejection. Engine test execution remains pending; source checks are not a substitute for Unreal automation.
 
+
+### Controller sensitivity and dead zone
+
+Controller right-stick input now uses a separate persisted tuning profile instead of borrowing mouse settings. Normal look sensitivity is clamped to 0.25–3.00x, ADS sensitivity to 0.10–1.00x, and the dead zone to 5–50%. The default profile is 1.00x look, 0.75x ADS, 18% dead zone and non-inverted vertical look. The dead-zone filter drops values inside the threshold and renormalizes the remaining range before frame-time-scaled yaw/pitch is applied.
+
+Controller reset restores only those four controller values; mouse sensitivity/inversion, aim hold/toggle mode, HUD preferences and keyboard overrides remain intact. UE runtime validation should include stick drift, near-threshold movement, full deflection, diagonals, restart persistence and reset independence.
 
 ## Keyboard movement editor
 
