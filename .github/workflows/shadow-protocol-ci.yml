@@ -51,6 +51,26 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Werror -I ../Source/ShadowProtocol/Public ../Tests/held-controls.cpp -o /tmp/sp-held-controls
           /tmp/sp-held-controls
 
+  identity-gateway:
+    name: Identity gateway verification
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ShadowProtocol-v1.0/IdentityGateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ShadowProtocol-v1.0/IdentityGateway/package.json
+      - name: Install identity gateway dependencies
+        run: npm install --no-audit --no-fund
+      - name: Typecheck identity gateway
+        run: npm run typecheck
+      - name: Test provider verification and assertion signing
+        run: npm test
+
   backend-postgres-integration:
     name: Backend PostgreSQL allocation + reconnect
     runs-on: ubuntu-latest
