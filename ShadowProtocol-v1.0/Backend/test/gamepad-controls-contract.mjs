@@ -43,11 +43,18 @@ test('gamepad look is separated from mouse delta input and remains gameplay gate
   assert.match(cpp, /LookUpGamepad[\s\S]*CanUseLocalControls\(\)/);
   assert.match(cpp, /TurnGamepad[\s\S]*GetDeltaSeconds\(\)[\s\S]*AddControllerYawInput/);
   assert.match(cpp, /LookUpGamepad[\s\S]*GetDeltaSeconds\(\)[\s\S]*AddControllerPitchInput/);
-  assert.match(cpp, /TurnGamepad[\s\S]*ApplyGamepadDeadZone/);
-  assert.match(cpp, /TurnGamepad[\s\S]*GetSafeGamepadLookSensitivity/);
-  assert.match(cpp, /TurnGamepad[\s\S]*GetSafeGamepadAimSensitivityMultiplier/);
-  assert.match(cpp, /LookUpGamepad[\s\S]*bInvertGamepadY/);
-  assert.doesNotMatch(cpp, /TurnGamepad[\s\S]*GetMouseSensitivity/);
+  const turnGamepad = cpp.split('void ASPCharacter::TurnGamepad(float V)')[1]
+    .split('void ASPCharacter::LookUpGamepad(float V)')[0];
+  const lookGamepad = cpp.split('void ASPCharacter::LookUpGamepad(float V)')[1]
+    .split('void ASPCharacter::Fire()')[0];
+
+  assert.match(turnGamepad, /ApplyGamepadDeadZone/);
+  assert.match(turnGamepad, /GetSafeGamepadLookSensitivity/);
+  assert.match(turnGamepad, /GetSafeGamepadAimSensitivityMultiplier/);
+  assert.doesNotMatch(turnGamepad, /GetMouseSensitivity/);
+  assert.match(lookGamepad, /ApplyGamepadDeadZone/);
+  assert.match(lookGamepad, /bInvertGamepadY/);
+  assert.doesNotMatch(lookGamepad, /IsMouseYInverted|GetMouseSensitivity/);
 });
 
 test('controller tuning is persisted, bounded and independent from mouse settings', async () => {
