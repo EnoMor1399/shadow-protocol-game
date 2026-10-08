@@ -336,6 +336,15 @@ Added saved toggle aiming (default off). First aim press enters aim, second exit
 Confirmed swaps now require exactly one unmodified keyboard/mouse binding per action. Multiple bindings and modifier chords are rejected before mutation, preserving both actions and saved overrides. Gamepad alternatives are excluded from this count and retained. Direct single-key reassignment remains an explicit replacement. The Unreal atomic-rebinding test now disables persistence for swaps and checks alternate keys on either action plus modifier-chord rejection. Engine test execution remains pending; source checks are not a substitute for Unreal automation.
 
 
+### Controller action remapping
+
+- Add separate persisted gamepad action overrides for supported combat/tactics actions.
+- Add a native controller-only action picker and key selector.
+- Reject stick/camera axes, non-gamepad inputs and occupied controller buttons before mutation.
+- Preserve keyboard/mouse alternatives while replacing only the selected action's gamepad mapping.
+- Add an independent restore-original-controller-buttons action that preserves controller tuning and keyboard overrides.
+- Keep confirmed controller-button swaps and platform-specific glyph switching outside this pass pending packaged-device validation.
+
 ### Controller tuning continuation
 
 - Add separate persisted controller look sensitivity (0.25–3.00x) and ADS sensitivity (0.10–1.00x).
