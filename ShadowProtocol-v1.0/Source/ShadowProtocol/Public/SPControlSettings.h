@@ -41,6 +41,7 @@ public:
     bool SwapActionBinding(FName Action, FName ConflictingAction, FKey NewKey, FString& Error, bool bSaveSettings = true);
     bool RebindGamepadAction(FName Action, FKey Key, FString& Error);
     bool FindGamepadActionUsingKey(FKey Key, FName ExcludingAction, FName& OutAction) const;
+    bool SwapGamepadActionBinding(FName Action, FName ConflictingAction, FKey NewKey, FString& Error, bool bSaveSettings = true);
     void ResetGamepadBindings(bool bSaveSettings = true);
     void ResetAllBindings(bool bSaveSettings = true);
     static FString GetActionKeyLabel(FName Action);
