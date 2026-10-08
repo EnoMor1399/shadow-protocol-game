@@ -349,6 +349,13 @@ Confirmed swaps now require exactly one unmodified keyboard/mouse binding per ac
 - Add an independent restore-original-controller-buttons action that preserves controller tuning and keyboard overrides.
 - Keep platform-specific glyph switching outside this pass pending packaged-device validation.
 
+### Controller menu navigation
+
+- Route Controls and ready-room modal focus to deterministic actionable UMG controls.
+- Focus the Controls return button first; in ready room prefer Ready, then spawn selection, then the root fallback.
+- Preserve the existing UI-only input mode and held-input release behavior.
+- Fix a literal escaped newline between ReadyRoom widget includes that would have broken an actual Unreal C++ compile.
+
 ### Controller-readable binding labels
 
 - Add shared platform-neutral controller text labels for common face buttons, triggers, shoulders, stick clicks, D-pad and menu buttons.
