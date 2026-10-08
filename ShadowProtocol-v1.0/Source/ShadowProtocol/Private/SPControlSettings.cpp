@@ -260,3 +260,28 @@ float USPControlSettings::GetSafeAimSensitivityMultiplier() const
 {
     return FMath::IsFinite(AimSensitivityMultiplier) ? FMath::Clamp(AimSensitivityMultiplier, 0.1f, 1.f) : 1.f;
 }
+
+float USPControlSettings::GetSafeGamepadLookSensitivity() const
+{
+    return FMath::IsFinite(GamepadLookSensitivity) ? FMath::Clamp(GamepadLookSensitivity, 0.25f, 3.f) : 1.f;
+}
+
+float USPControlSettings::GetSafeGamepadAimSensitivityMultiplier() const
+{
+    return FMath::IsFinite(GamepadAimSensitivityMultiplier) ? FMath::Clamp(GamepadAimSensitivityMultiplier, 0.1f, 1.f) : 0.75f;
+}
+
+float USPControlSettings::GetSafeGamepadDeadZone() const
+{
+    return FMath::IsFinite(GamepadDeadZone) ? FMath::Clamp(GamepadDeadZone, 0.05f, 0.5f) : 0.18f;
+}
+
+float USPControlSettings::ApplyGamepadDeadZone(float Value) const
+{
+    if (!FMath::IsFinite(Value)) return 0.f;
+    const float DeadZone = GetSafeGamepadDeadZone();
+    const float Magnitude = FMath::Abs(Value);
+    if (Magnitude <= DeadZone) return 0.f;
+    const float Normalized = FMath::Clamp((Magnitude - DeadZone) / FMath::Max(KINDA_SMALL_NUMBER, 1.f - DeadZone), 0.f, 1.f);
+    return FMath::Sign(Value) * Normalized;
+}
