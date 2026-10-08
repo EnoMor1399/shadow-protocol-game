@@ -266,6 +266,14 @@ void USPControlsWidget::NativeConstruct()
     }
 }
 
+void USPControlsWidget::FocusPrimaryControl()
+{
+    if (ResumeButton && ResumeButton->GetIsEnabled())
+        ResumeButton->SetKeyboardFocus();
+    else
+        SetKeyboardFocus();
+}
+
 void USPControlsWidget::SetSensitivity(float Value)
 {
     if (auto* PC = GetOwningPlayer<ASPObserverPlayerController>()) PC->SetMouseSensitivity(Value);
