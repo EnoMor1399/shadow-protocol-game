@@ -37,6 +37,9 @@ test('gateway rate-limits repeated use of the same provider credential fingerpri
   const third = await app.inject({ method: 'POST', url: '/v1/platform-ticket', payload });
 
   assert.equal(first.statusCode, 401);
+  assert.equal(first.headers['cache-control'], 'no-store');
+  assert.equal(first.headers['pragma'], 'no-cache');
+  assert.equal(first.headers['x-content-type-options'], 'nosniff');
   assert.equal(second.statusCode, 401);
   assert.equal(third.statusCode, 429);
   assert.equal(third.json().error, 'platform-ticket-rate-limited');
