@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import { z } from 'zod';
 import { signIdentityAssertion } from './assertion.js';
+import { credentialFingerprint, FixedWindowLimiter } from './limiter.js';
 import { verifyProviderIdentity } from './providers.js';
 
 const PORT = Number(process.env.PORT ?? 8090);
@@ -17,12 +18,24 @@ const configuredBuilds = (process.env.ACCEPTED_NETWORK_BUILDS ?? 'SP-1.0.1')
   .filter(Boolean);
 const ACCEPTED_NETWORK_BUILDS = new Set(configuredBuilds);
 
+function boundedInteger(name: string, fallback: number, min: number, max: number): number {
+  const parsed = Number(process.env[name] ?? fallback);
+  return Number.isFinite(parsed) ? Math.min(max, Math.max(min, Math.trunc(parsed))) : fallback;
+}
+
+const IP_MAX_ATTEMPTS = boundedInteger('PROVIDER_IP_MAX_ATTEMPTS', 30, 1, 300);
+const CREDENTIAL_MAX_ATTEMPTS = boundedInteger('PROVIDER_CREDENTIAL_MAX_ATTEMPTS', 5, 1, 50);
+const RATE_WINDOW_MS = boundedInteger('PROVIDER_RATE_WINDOW_MS', 60_000, 10_000, 300_000);
+
 if (ASSERTION_SECRET.length < 32) {
   throw new Error('PLATFORM_IDENTITY_ASSERTION_SECRET must be configured with at least 32 characters');
 }
 if (ACCEPTED_NETWORK_BUILDS.size === 0) {
   throw new Error('At least one accepted network build must be configured');
 }
+
+const ipLimiter = new FixedWindowLimiter(IP_MAX_ATTEMPTS, RATE_WINDOW_MS);
+const credentialLimiter = new FixedWindowLimiter(CREDENTIAL_MAX_ATTEMPTS, RATE_WINDOW_MS);
 
 const ticketSchema = z.object({
   provider: z.enum(['steam', 'eos']),
@@ -61,6 +74,14 @@ export function buildServer() {
     const input = parsed.data;
     if (!ACCEPTED_NETWORK_BUILDS.has(input.networkBuild)) {
       return reply.code(426).send({ error: 'client-build-incompatible' });
+    }
+
+    if (!ipLimiter.consume(request.ip)) {
+      return reply.code(429).send({ error: 'platform-ticket-rate-limited' });
+    }
+    const fingerprint = credentialFingerprint(input.provider, input.authToken, ASSERTION_SECRET);
+    if (!credentialLimiter.consume(fingerprint)) {
+      return reply.code(429).send({ error: 'platform-ticket-rate-limited' });
     }
 
     let identity;
