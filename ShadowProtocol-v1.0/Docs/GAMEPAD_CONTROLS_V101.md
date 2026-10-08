@@ -48,6 +48,10 @@ Controller help text now routes through a shared key-label formatter. Common gam
 
 This is a text-label compatibility layer, not runtime device detection or icon/glyph switching. Automatic Xbox/PlayStation glyph packs remain pending packaged-device work.
 
+## Controller-first menu focus
+
+The modal input path now hands focus to a concrete interactive control instead of leaving focus only on the root widget. Controls opens on **Return to game / ready room**. The ready room prefers the enabled **Ready** button, then the spawn selector, and falls back to the root only when no actionable control is currently enabled. This gives D-pad/stick navigation a deterministic starting point while preserving keyboard and mouse input.
+
 ## CI contract
 
 `Backend/test/gamepad-controls-contract.mjs` now runs with the existing Unreal source-contract suite. It checks required stock controller mappings, dedicated right-stick look handlers, frame-time scaling, gameplay gating, independent sensitivity/ADS/inversion/dead-zone settings, safe clamping, native UI wiring, controller action override isolation, confirmed atomic swaps with rollback/stale-owner protection, and preservation of keyboard/gamepad alternatives across resets.
