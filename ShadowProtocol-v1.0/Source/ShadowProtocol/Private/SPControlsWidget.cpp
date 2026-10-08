@@ -157,7 +157,7 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
             FString Keys;
             for (const auto& Mapping : Input->GetAxisMappings())
                 if (Mapping.AxisName == FName(Hint.Mapping))
-                    Keys += (Keys.IsEmpty() ? TEXT("") : TEXT(" / ")) + Mapping.Key.GetDisplayName().ToString();
+                    Keys += (Keys.IsEmpty() ? TEXT("") : TEXT(" / ")) + USPControlSettings::GetKeyDisplayLabel(Mapping.Key);
             Label(FString::Printf(TEXT("%s   %s"), Hint.Label, *Keys), 16, FLinearColor::White);
         }
         Label(TEXT("COMBAT & TACTICS"), 20, FLinearColor(0.35f, 0.85f, 0.8f));
@@ -197,7 +197,7 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
                     if (Mapping.bAlt) Key += TEXT("Alt+");
                     if (Mapping.bShift) Key += TEXT("Shift+");
                     if (Mapping.bCmd) Key += TEXT("Cmd+");
-                    Key += Mapping.Key.GetDisplayName().ToString();
+                    Key += USPControlSettings::GetKeyDisplayLabel(Mapping.Key);
                     Keys += (Keys.IsEmpty() ? TEXT("") : TEXT(" / ")) + Key;
                 }
             ActionNames.Add(Hint.Label, FName(Hint.Mapping));
@@ -371,7 +371,7 @@ void USPControlsWidget::CaptureGamepadBinding(FInputChord Chord)
             }
             Error = FString::Printf(
                 TEXT("%s is assigned to %s. Confirm the controller swap to exchange both buttons atomically."),
-                *Chord.Key.GetDisplayName().ToString(),
+                *USPControlSettings::GetKeyDisplayLabel(Chord.Key),
                 *ConflictAction.ToString());
         }
         else
