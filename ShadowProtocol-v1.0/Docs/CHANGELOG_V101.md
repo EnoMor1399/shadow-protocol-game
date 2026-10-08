@@ -349,6 +349,12 @@ Confirmed swaps now require exactly one unmodified keyboard/mouse binding per ac
 - Add an independent restore-original-controller-buttons action that preserves controller tuning and keyboard overrides.
 - Keep platform-specific glyph switching outside this pass pending packaged-device validation.
 
+### Controller-readable binding labels
+
+- Add shared platform-neutral controller text labels for common face buttons, triggers, shoulders, stick clicks, D-pad and menu buttons.
+- Show dual Xbox/PlayStation terminology such as `A / Cross` and `RT / R2` in HUD/help and controls binding text.
+- Keep runtime device detection and icon/glyph switching outside this source-level pass.
+
 ### Controller tuning continuation
 
 - Add separate persisted controller look sensitivity (0.25–3.00x) and ADS sensitivity (0.10–1.00x).
