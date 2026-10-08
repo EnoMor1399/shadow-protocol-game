@@ -176,6 +176,22 @@ test('controller labels are platform neutral text rather than raw Unreal key nam
   assert.match(controls, /GetKeyDisplayLabel\(Chord\.Key\)/);
 });
 
+test('controller menus route focus to actionable UMG controls', async () => {
+  const controlsHeader = await source('../../Source/ShadowProtocol/Public/SPControlsWidget.h');
+  const controls = await source('../../Source/ShadowProtocol/Private/SPControlsWidget.cpp');
+  const readyHeader = await source('../../Source/ShadowProtocol/Public/SPReadyRoomWidget.h');
+  const ready = await source('../../Source/ShadowProtocol/Private/SPReadyRoomWidget.cpp');
+  const controller = await source('../../Source/ShadowProtocol/Private/SPObserverPlayerController.cpp');
+
+  assert.match(controlsHeader, /FocusPrimaryControl/);
+  assert.match(controls, /ResumeButton->SetKeyboardFocus\(\)/);
+  assert.match(readyHeader, /FocusPrimaryControl/);
+  assert.match(ready, /ReadyButton->SetKeyboardFocus\(\)/);
+  assert.match(ready, /SpawnChoice->SetKeyboardFocus\(\)/);
+  assert.match(controller, /ControlsWidget->FocusPrimaryControl\(\)/);
+  assert.match(controller, /ReadyRoomWidget->FocusPrimaryControl\(\)/);
+});
+
 test('native UI exposes controller shortcuts while keeping keyboard and controller remapping separate', async () => {
   const settings = await source('../../Source/ShadowProtocol/Private/SPControlSettings.cpp');
   const hud = await source('../../Source/ShadowProtocol/Private/SPCombatHUD.cpp');
