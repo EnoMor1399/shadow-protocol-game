@@ -25,16 +25,65 @@ configured. Those provider adapters belong in the trusted identity gateway.
    - provider name;
    - stable provider subject;
    - selected matchmaking region;
-   - network build.
+   - network build;
+   - SHA-256 hash of the device nonce used for this exchange.
 4. Unreal receives only that signed assertion.
 5. `USPBackendSessionSubsystem::ExchangePlatformIdentityAssertion` posts it with
    a device nonce to `POST /v1/auth/platform-session`.
-6. The backend verifies the HMAC, issuer/audience, build, lifetime and replay state.
+6. The backend verifies the HMAC, issuer/audience, build, lifetime, nonce binding and replay state.
 7. PostgreSQL maps the provider subject hash to a stable internal `users.id`.
 8. The assertion `jti` is consumed once and attached to the created game session.
 9. The backend returns the normal short-lived signed game-session token.
 10. Unreal keeps the backend token, user id, provider, region and expiry in memory
     and continues through allocation/reconnect as before.
+
+## Steam / EOS client bridge
+
+`USPPlatformIdentitySubsystem` now provides the missing Unreal-side provider bridge before the assertion exchange:
+
+1. Read the active world-scoped OnlineSubsystem.
+2. Accept only Steam or EOS/EOSPlus provider names. The NULL provider remains a local networking baseline and is rejected for production identity.
+3. Require a verified backend compatibility handshake.
+4. If local user 0 is not signed in and `bAttemptAutoLogin=true`, call the provider's OnlineSubsystem `AutoLogin` flow and correlate the asynchronous login delegate.
+5. Read the provider verification token through `IOnlineIdentity::GetAuthToken(0)`. The token remains memory-only.
+6. POST the token to the separately configured trusted identity gateway at `/v1/platform-ticket`.
+7. The gateway verifies that provider token with Steam/EOS server-side facilities, derives the trusted provider subject itself, hashes the supplied device nonce, and signs the short-lived assertion.
+8. Unreal validates the returned provider/build metadata and passes only the signed assertion plus the same nonce to `ExchangePlatformIdentityAssertion`.
+
+The provider-ticket request body is:
+
+```json
+{
+  "provider": "steam | eos",
+  "authType": "<OnlineSubsystem auth type>",
+  "authToken": "<memory-only provider token>",
+  "region": "acc",
+  "networkBuild": "SP-1.0.1",
+  "deviceNonce": "<8-128 character nonce>"
+}
+```
+
+The expected gateway response is:
+
+```json
+{
+  "identityAssertion": "<short-lived signed assertion>",
+  "provider": "steam",
+  "networkBuild": "SP-1.0.1"
+}
+```
+
+The gateway must never trust a client-supplied provider subject/account id. It derives the subject from successful provider-side token verification. The assertion must include `deviceNonceHash = SHA-256(deviceNonce)`; the backend compares that signed hash with the nonce supplied to `POST /v1/auth/platform-session` using a timing-safe comparison.
+
+Project defaults deliberately leave the gateway unset:
+
+```ini
+[/Script/ShadowProtocol.SPPlatformIdentitySubsystem]
+IdentityGatewayBaseUrl=
+bAttemptAutoLogin=true
+```
+
+Shipping builds reject non-HTTPS gateway URLs. Steam/EOS plugin credentials and provider SDK configuration remain platform/deployment configuration and are not embedded in this source-level bridge.
 
 ## Backend policy
 
@@ -109,6 +158,7 @@ GitHub/PostgreSQL coverage verifies:
 
 - assertion signature rejection;
 - incompatible-build rejection;
+- signed device-nonce mismatch rejection;
 - one-time replay rejection;
 - stable provider→internal-user mapping across fresh assertions;
 - assertion audit linkage on `game_sessions`;
@@ -118,9 +168,6 @@ GitHub/PostgreSQL coverage verifies:
 
 ## Remaining provider work
 
-To complete a real platform deployment, implement the identity gateway adapters for
-the selected provider(s), for example Steam or EOS, and have those adapters issue
-the assertion only after provider-side ticket verification.
+The Unreal Steam/EOS client handoff is now implemented at source level. To complete a real platform deployment, implement and deploy the trusted identity-gateway adapters that verify Steam/EOS tokens and sign the documented nonce-bound assertion.
 
-UE5.6/UHT, packaged login UI, provider SDK login, account-linking UX and real
-provider sandbox testing remain required before production sign-off.
+UE5.6/UHT, provider plugin/configuration builds, packaged login UI, provider SDK/server verification, account-linking UX and real Steam/EOS sandbox testing remain required before production sign-off.
