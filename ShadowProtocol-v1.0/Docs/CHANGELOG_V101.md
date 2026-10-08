@@ -383,10 +383,16 @@ Confirmed swaps now require exactly one unmodified keyboard/mouse binding per ac
 
 ### Trusted platform identity bootstrap
 
+- Add `USPPlatformIdentitySubsystem` as a world/provider-aware Unreal bridge from authenticated Steam/EOS OnlineSubsystem identity to the trusted identity gateway.
+- Require a green compatibility handshake, reject NULL/unknown identity providers, optionally use provider AutoLogin, and keep `IOnlineIdentity::GetAuthToken` credentials memory-only.
+- Send provider credentials only to the separately configured `/v1/platform-ticket` gateway endpoint; Shipping requires HTTPS.
+- Hand only the gateway's short-lived signed assertion into the existing backend `/v1/auth/platform-session` exchange.
+- Bind every signed identity assertion to `SHA-256(deviceNonce)` and reject a nonce mismatch before assertion consumption.
+- Add source contracts for provider allow-listing, token destination, secret exclusion, stale async correlation, HTTPS enforcement and nonce binding.
 - Add `v101_platform_identity.sql` with hashed provider-subject mappings and
   replay-audited platform identity assertions.
 - Add `POST /v1/auth/platform-session` for short-lived HMAC-signed identity
-  gateway assertions bound to provider, subject, region and network build.
+  gateway assertions bound to provider, subject, region, network build and device nonce hash.
 - Consume each assertion `jti` once; reject replay, incompatible builds and
   inactive accounts.
 - Resolve fresh assertions for the same provider subject to one stable backend
@@ -397,5 +403,4 @@ Confirmed swaps now require exactly one unmodified keyboard/mouse binding per ac
   platform-session path.
 - Add Unreal `ExchangePlatformIdentityAssertion`, stale-response cancellation,
   in-memory backend identity metadata and `OnAuthenticatedSessionEstablished`.
-- Keep provider ticket verification outside the shipped client; Steam/EOS gateway
-  adapters and real provider sandbox tests remain pending.
+- Keep provider ticket verification outside the shipped client. The client handoff is implemented; deployable Steam/EOS gateway adapters, plugin configuration and real provider sandbox tests remain pending.
