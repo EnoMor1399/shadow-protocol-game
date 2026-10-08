@@ -391,6 +391,7 @@ Confirmed swaps now require exactly one unmodified keyboard/mouse binding per ac
 - Add bounded source-IP and HMAC-fingerprinted provider-credential rate limits without retaining raw provider tokens.
 - Disable request logging and redact authorization, provider token and device nonce fields.
 - Add unit and HTTP-route tests for assertion signing, provider verification, metadata checks and rate limiting.
+- Add production TypeScript build output, a non-root Node 22 container, health check, no-store ticket responses and `nosniff` headers.
 
 ### Trusted platform identity bootstrap
 
