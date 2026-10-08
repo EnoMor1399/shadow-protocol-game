@@ -28,7 +28,9 @@ The exact display names vary by controller platform, but Unreal receives the sam
 
 Mouse delta input remains on the existing `Turn` and `LookUp` axes. Controller camera input uses separate `TurnGamepad` and `LookUpGamepad` axes so stick input can be scaled by frame time rather than being treated like mouse delta.
 
-Controller look currently shares the saved normal sensitivity, aim-sensitivity multiplier and vertical inversion preference with mouse look. This keeps one coherent sensitivity profile until separate controller sliders are runtime-validated in UE.
+Controller look now has its own persisted tuning profile in the native Controls panel: normal look sensitivity (0.25–3.00x), ADS sensitivity multiplier (0.10–1.00x), right-stick dead zone (5–50%) and vertical inversion. Defaults are 1.00x normal look, 0.75x ADS, 18% dead zone and non-inverted Y. Invalid or non-finite saved values are clamped/fallback safely before use.
+
+The right-stick dead zone is applied before look-rate scaling, then the remaining stick range is renormalized so reaching full deflection still produces the configured maximum turn rate. Mouse sensitivity and mouse inversion are no longer read by the controller look handlers.
 
 All look handlers still call `CanUseLocalControls()`, so ready-room/controls UI, downed/eliminated state and other local gameplay gates block controller camera input the same way they block mouse input.
 
@@ -40,8 +42,8 @@ This pass adds a usable default controller layout. It does **not** add controlle
 
 ## CI contract
 
-`Backend/test/gamepad-controls-contract.mjs` now runs with the existing Unreal source-contract suite. It checks required stock controller mappings, dedicated right-stick look handlers, frame-time scaling, gameplay gating, ADS sensitivity reuse and preservation of gamepad alternatives by keyboard rebinding code.
+`Backend/test/gamepad-controls-contract.mjs` now runs with the existing Unreal source-contract suite. It checks required stock controller mappings, dedicated right-stick look handlers, frame-time scaling, gameplay gating, independent sensitivity/ADS/inversion/dead-zone settings, safe clamping, native UI wiring and preservation of gamepad alternatives by keyboard rebinding code.
 
 ## Runtime validation still required
 
-UE5.6/UHT and packaged client checks remain required. Test at minimum controller dead zones and diagonals, right-stick look at multiple frame rates, ADS sensitivity/inversion, modal transitions with held sticks/triggers, scoreboard/menu buttons and keyboard rebinding followed by controller use.
+UE5.6/UHT and packaged client checks remain required. Test at minimum 5/18/50% dead zones, small-stick drift, diagonals, right-stick look at 30/60/120+ FPS, independent mouse/controller sensitivity, ADS scaling, controller-only inversion, persistence/reset, modal transitions with held sticks/triggers, scoreboard/menu buttons and keyboard rebinding followed by controller use.
