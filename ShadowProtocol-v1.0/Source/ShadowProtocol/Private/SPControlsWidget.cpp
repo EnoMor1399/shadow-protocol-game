@@ -219,6 +219,10 @@ TSharedRef<SWidget> USPControlsWidget::RebuildWidget()
         GamepadBindingKey->OnKeySelected.AddUniqueDynamic(this, &USPControlsWidget::CaptureGamepadBinding);
         Column->AddChildToVerticalBox(GamepadBindingKey)->SetPadding(FMargin(0, 8));
         GamepadBindingFeedback = Label(TEXT("Controller remapping changes controller buttons only; keyboard/mouse bindings are preserved."), 16, FLinearColor::White);
+        ConfirmGamepadSwapButton = Button(TEXT("Confirm controller swap"));
+        ConfirmGamepadSwapButton->SetIsEnabled(false);
+        ConfirmGamepadSwapText = Cast<UTextBlock>(ConfirmGamepadSwapButton->GetContent());
+        ConfirmGamepadSwapButton->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ConfirmPendingGamepadSwap);
         Button(TEXT("Restore original controller buttons"))->OnClicked.AddUniqueDynamic(this, &USPControlsWidget::ResetGamepadBindings);
         BindingAction->SetSelectedIndex(0);
         GamepadBindingAction->SetSelectedIndex(0);
@@ -283,6 +287,7 @@ void USPControlsWidget::ResetDefaults()
 void USPControlsWidget::CloseControls()
 {
     ClearPendingSwap();
+    ClearPendingGamepadSwap();
     if (auto* PC = GetOwningPlayer<ASPObserverPlayerController>()) PC->ToggleControls();
 }
 FReply USPControlsWidget::NativeOnPreviewKeyDown(const FGeometry& Geometry, const FKeyEvent& Event)
@@ -310,6 +315,7 @@ void USPControlsWidget::ChooseBindingAction(FString Selection, ESelectInfo::Type
 
 void USPControlsWidget::ChooseGamepadBindingAction(FString Selection, ESelectInfo::Type SelectionType)
 {
+    ClearPendingGamepadSwap();
     RefreshGamepadBinding();
 }
 
@@ -336,6 +342,7 @@ void USPControlsWidget::RefreshGamepadBinding()
 void USPControlsWidget::CaptureGamepadBinding(FInputChord Chord)
 {
     if (bSynchronizingGamepadBinding) return;
+    ClearPendingGamepadSwap();
     const FName* Action = ActionNames.Find(GamepadBindingAction ? GamepadBindingAction->GetSelectedOption() : FString());
     FString Error;
     if (!Action || Chord.bShift || Chord.bCtrl || Chord.bAlt || Chord.bCmd || !Chord.Key.IsGamepadKey())
@@ -346,7 +353,31 @@ void USPControlsWidget::CaptureGamepadBinding(FInputChord Chord)
     {
         if (auto* PC = GetOwningPlayer<ASPObserverPlayerController>())
             if (auto* Character = Cast<ASPCharacter>(PC->GetPawn())) Character->ReleaseHeldControls();
-        GetMutableDefault<USPControlSettings>()->RebindGamepadAction(*Action, Chord.Key, Error);
+
+        auto* Settings = GetMutableDefault<USPControlSettings>();
+        FName ConflictAction;
+        if (Settings->FindGamepadActionUsingKey(Chord.Key, *Action, ConflictAction))
+        {
+            PendingGamepadSwapAction = *Action;
+            PendingGamepadConflictAction = ConflictAction;
+            PendingGamepadSwapKey = Chord.Key;
+            if (ConfirmGamepadSwapButton) ConfirmGamepadSwapButton->SetIsEnabled(true);
+            if (ConfirmGamepadSwapText)
+            {
+                ConfirmGamepadSwapText->SetText(FText::FromString(FString::Printf(
+                    TEXT("Swap %s with %s"),
+                    *PendingGamepadSwapAction.ToString(),
+                    *PendingGamepadConflictAction.ToString())));
+            }
+            Error = FString::Printf(
+                TEXT("%s is assigned to %s. Confirm the controller swap to exchange both buttons atomically."),
+                *Chord.Key.GetDisplayName().ToString(),
+                *ConflictAction.ToString());
+        }
+        else
+        {
+            Settings->RebindGamepadAction(*Action, Chord.Key, Error);
+        }
     }
     if (GamepadBindingFeedback)
         GamepadBindingFeedback->SetText(FText::FromString(Error.IsEmpty() ? TEXT("Controller binding applied and saved.") : Error));
@@ -354,8 +385,48 @@ void USPControlsWidget::CaptureGamepadBinding(FInputChord Chord)
     RefreshGamepadBinding();
 }
 
+void USPControlsWidget::ConfirmPendingGamepadSwap()
+{
+    if (PendingGamepadSwapAction.IsNone() || PendingGamepadConflictAction.IsNone() || !PendingGamepadSwapKey.IsValid())
+    {
+        ClearPendingGamepadSwap();
+        return;
+    }
+
+    if (auto* PC = GetOwningPlayer<ASPObserverPlayerController>())
+        if (auto* Character = Cast<ASPCharacter>(PC->GetPawn())) Character->ReleaseHeldControls();
+
+    FString Error;
+    const FString SwapSummary = FString::Printf(
+        TEXT("%s and %s controller buttons swapped and saved."),
+        *PendingGamepadSwapAction.ToString(),
+        *PendingGamepadConflictAction.ToString());
+
+    const bool bSwapped = GetMutableDefault<USPControlSettings>()->SwapGamepadActionBinding(
+        PendingGamepadSwapAction,
+        PendingGamepadConflictAction,
+        PendingGamepadSwapKey,
+        Error);
+
+    ClearPendingGamepadSwap();
+    if (GamepadBindingFeedback)
+        GamepadBindingFeedback->SetText(FText::FromString(bSwapped ? SwapSummary : Error));
+    RefreshBindings();
+    RefreshGamepadBinding();
+}
+
+void USPControlsWidget::ClearPendingGamepadSwap()
+{
+    PendingGamepadSwapAction = NAME_None;
+    PendingGamepadConflictAction = NAME_None;
+    PendingGamepadSwapKey = FKey();
+    if (ConfirmGamepadSwapButton) ConfirmGamepadSwapButton->SetIsEnabled(false);
+    if (ConfirmGamepadSwapText) ConfirmGamepadSwapText->SetText(FText::FromString(TEXT("Confirm controller swap")));
+}
+
 void USPControlsWidget::ResetGamepadBindings()
 {
+    ClearPendingGamepadSwap();
     GetMutableDefault<USPControlSettings>()->ResetGamepadBindings();
     if (GamepadBindingFeedback)
         GamepadBindingFeedback->SetText(FText::FromString(TEXT("Original controller action buttons restored. Controller tuning and keyboard/mouse bindings are unchanged.")));
@@ -479,6 +550,7 @@ void USPControlsWidget::ClearPendingSwap()
 void USPControlsWidget::ResetBindings()
 {
     ClearPendingSwap();
+    ClearPendingGamepadSwap();
     GetMutableDefault<USPControlSettings>()->ResetAllBindings();
     BindingFeedback->SetText(FText::FromString(TEXT("Original movement and action keys restored. Mouse and HUD preferences unchanged.")));
     RefreshBindings();
