@@ -242,13 +242,14 @@ void USPPlatformIdentitySubsystem::SubmitProviderToken(const FString& AuthToken,
         &USPPlatformIdentitySubsystem::HandleGatewayResponse,
         Generation);
 
-    OnBridgeStarted.Broadcast(PendingProvider);
-
     if (!Request->ProcessRequest())
     {
         if (GatewayRequest == Request) GatewayRequest.Reset();
         Fail(TEXT("Unable to start the trusted identity gateway request."));
+        return;
     }
+
+    OnBridgeStarted.Broadcast(PendingProvider);
 }
 
 void USPPlatformIdentitySubsystem::HandleGatewayResponse(
@@ -281,9 +282,9 @@ void USPPlatformIdentitySubsystem::HandleGatewayResponse(
     Json->TryGetStringField(TEXT("provider"), ResponseProvider);
     Json->TryGetStringField(TEXT("networkBuild"), ResponseBuild);
 
-    if (Assertion.Len() < 32)
+    if (Assertion.Len() < 32 || Assertion.Len() > 4096)
     {
-        Fail(TEXT("The trusted identity gateway did not return a signed identity assertion."));
+        Fail(TEXT("The trusted identity gateway did not return a valid signed identity assertion."));
         return;
     }
     if (!ResponseProvider.IsEmpty() && !ResponseProvider.Equals(PendingProvider, ESearchCase::IgnoreCase))
