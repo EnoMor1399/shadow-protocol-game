@@ -14,6 +14,7 @@ class SHADOWPROTOCOL_API USPReadyRoomWidget : public UUserWidget
     GENERATED_BODY()
 public:
     void RefreshReadyRoom();
+    void FocusPrimaryControl();
 protected:
     virtual TSharedRef<SWidget> RebuildWidget() override;
     virtual FReply NativeOnPreviewKeyDown(const FGeometry& Geometry, const FKeyEvent& Event) override;
