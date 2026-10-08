@@ -38,11 +38,13 @@ All look handlers still call `CanUseLocalControls()`, so ready-room/controls UI,
 
 The existing action and movement override system intentionally rewrites only keyboard/mouse mappings. Gamepad alternatives are preserved when keyboard actions are rebound, swapped, reset or when keyboard movement is changed.
 
-This pass adds a usable default controller layout. It does **not** add controller remapping yet. Controller remapping, glyph switching and platform-specific UI navigation remain a later runtime pass so they can be validated with real Xbox/PlayStation-compatible devices.
+The native Controls panel now also provides saved controller action-button remapping for the supported combat/tactics actions. Controller overrides are stored separately from keyboard/mouse overrides. A controller rebind is rejected before mutation if the key is not a gamepad button, is used by movement/camera axes, or is already owned by another supported/default action. **Restore original controller buttons** clears only controller action overrides; look sensitivity, dead zone, inversion and keyboard/mouse mappings are preserved.
+
+Confirmed controller-button swaps are not implemented in this pass: an occupied button must first be freed or another button chosen. Platform-specific glyph switching and deeper platform navigation remain runtime work.
 
 ## CI contract
 
-`Backend/test/gamepad-controls-contract.mjs` now runs with the existing Unreal source-contract suite. It checks required stock controller mappings, dedicated right-stick look handlers, frame-time scaling, gameplay gating, independent sensitivity/ADS/inversion/dead-zone settings, safe clamping, native UI wiring and preservation of gamepad alternatives by keyboard rebinding code.
+`Backend/test/gamepad-controls-contract.mjs` now runs with the existing Unreal source-contract suite. It checks required stock controller mappings, dedicated right-stick look handlers, frame-time scaling, gameplay gating, independent sensitivity/ADS/inversion/dead-zone settings, safe clamping, native UI wiring, controller action override isolation/conflict rejection and preservation of keyboard/gamepad alternatives across resets.
 
 ## Runtime validation still required
 
