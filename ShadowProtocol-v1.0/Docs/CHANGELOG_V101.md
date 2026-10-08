@@ -339,11 +339,15 @@ Confirmed swaps now require exactly one unmodified keyboard/mouse binding per ac
 ### Controller action remapping
 
 - Add separate persisted gamepad action overrides for supported combat/tactics actions.
+- Add explicit confirmed controller-button swaps for occupied supported actions.
+- Recheck conflict ownership at confirmation time and reject stale confirmations.
+- Require exactly one gamepad mapping per side before swapping so alternate mappings are never silently discarded.
+- Apply both swapped buttons as one candidate and restore the previous controller override set on validation failure.
 - Add a native controller-only action picker and key selector.
 - Reject stick/camera axes, non-gamepad inputs and occupied controller buttons before mutation.
 - Preserve keyboard/mouse alternatives while replacing only the selected action's gamepad mapping.
 - Add an independent restore-original-controller-buttons action that preserves controller tuning and keyboard overrides.
-- Keep confirmed controller-button swaps and platform-specific glyph switching outside this pass pending packaged-device validation.
+- Keep platform-specific glyph switching outside this pass pending packaged-device validation.
 
 ### Controller tuning continuation
 
