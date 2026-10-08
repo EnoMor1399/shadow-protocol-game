@@ -64,6 +64,14 @@ private:
     UPROPERTY(Transient) TObjectPtr<UComboBoxString> BindingAction;
     UPROPERTY(Transient) TObjectPtr<UInputKeySelector> BindingKey;
     UPROPERTY(Transient) TObjectPtr<UTextBlock> BindingFeedback;
+    UPROPERTY(Transient) TObjectPtr<UComboBoxString> GamepadBindingAction;
+    UPROPERTY(Transient) TObjectPtr<UInputKeySelector> GamepadBindingKey;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> GamepadBindingFeedback;
+    bool bSynchronizingGamepadBinding = false;
+    void RefreshGamepadBinding();
+    UFUNCTION() void ChooseGamepadBindingAction(FString Selection, ESelectInfo::Type SelectionType);
+    UFUNCTION() void CaptureGamepadBinding(FInputChord Chord);
+    UFUNCTION() void ResetGamepadBindings();
     UPROPERTY(Transient) TObjectPtr<UButton> ConfirmSwapButton;
     UPROPERTY(Transient) TObjectPtr<UTextBlock> ConfirmSwapText;
     UPROPERTY(Transient) TMap<FName, TObjectPtr<UTextBlock>> BindingLabels;
