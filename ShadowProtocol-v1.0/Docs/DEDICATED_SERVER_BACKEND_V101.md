@@ -193,3 +193,40 @@ Production registration now also requires a short-lived single-use `SP_NODE_ATTE
 The dedicated server never receives `ORCHESTRATOR_ATTESTATION_SECRET`. After successful attested registration, `USPDedicatedServerBackendSubsystem` clears its in-memory attestation. If authority is later lost, the process must be relaunched by the orchestrator with a fresh single-use assertion rather than replaying the consumed token.
 
 See `NODE_ATTESTATION_V101.md`.
+
+## Heartbeat health fail-closed admission
+
+The dedicated server now tracks consecutive heartbeat failures locally in addition to the backend registry TTL.
+
+- A freshly registered node starts healthy.
+- Successful heartbeats reset the failure counter and restore local admission health.
+- After three consecutive heartbeat failures, the node remains running for existing players but rejects new player admissions locally.
+- `PreLogin`, `PostLogin`, and the dedicated admission bridge all require `IsHeartbeatHealthy()`.
+- A valid heartbeat response restores admission automatically unless the node is intentionally draining.
+- The backend scheduler continues to independently exclude stale nodes using `SERVER_HEARTBEAT_TTL_MS`.
+
+This closes the gap where a server could remain locally permissive while it had lost backend connectivity but had not yet aged out of the central registry.
+
+## Atomic match release
+
+A shared 5v5 match has one `server_allocations` row per player, even though all ten allocations target the same dedicated node. Match completion must therefore release the whole match rather than a single player allocation.
+
+The dedicated server now calls:
+
+```text
+POST /v1/servers/release-match
+```
+
+with the active `matchId` and either `closed` or `failed`.
+
+The backend transaction:
+
+1. authenticates the node credential;
+2. verifies the node owns an active allocation for the match;
+3. rejects cross-node ownership conflicts;
+4. closes every still-active allocation for that match/node;
+5. subtracts the exact released allocation count from `game_server_nodes.active_allocations`;
+6. marks the match `closed` or `failed` and sets `ended_at`;
+7. resets the match roster connection state.
+
+`ASPProtocolGameMode` records the first admitted backend match id and rejects attempts to mix a different match into the same running server instance. Normal match completion releases with `closed`; abnormal GameMode teardown sends a best-effort `failed` release if the match is still active.
