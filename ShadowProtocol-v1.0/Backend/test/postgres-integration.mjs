@@ -732,7 +732,35 @@ test('assembles ten solo allocations into one shared 5v5 Protocol match', async 
   assert.equal(overflow.status,503);
   assert.equal((await overflow.json()).error,'no-healthy-game-server');
 
-  // The server credential remains valid after ten atomic active reservations.
+  const wrongNodeRelease=await nodePost('/v1/servers/release-match',
+    {matchId:sharedMatchId,outcome:'closed'},PRIMARY_SERVER_ID,primaryCredential);
+  assert.equal(wrongNodeRelease.status,403);
+  assert.equal((await wrongNodeRelease.json()).error,'match-node-ownership-required');
+
+  const matchRelease=await nodePost('/v1/servers/release-match',
+    {matchId:sharedMatchId,outcome:'closed'},'LAB-TEN',node.nodeCredential);
+  assert.equal(matchRelease.status,200);
+  const releasedMatch=await matchRelease.json();
+  assert.equal(releasedMatch.released,true);
+  assert.equal(releasedMatch.matchId,sharedMatchId);
+  assert.equal(releasedMatch.serverId,'LAB-TEN');
+  assert.equal(releasedMatch.status,'closed');
+  assert.equal(releasedMatch.releasedAllocations,10);
+  assert.equal(releasedMatch.activeAllocations,0);
+
+  const closedAllocations=await db.query(`select status,count(*)::int as count
+    from server_allocations where match_id=$1 group by status order by status`,[sharedMatchId]);
+  assert.equal(Number(closedAllocations.rows.find(r=>r.status==='closed')?.count??0),10);
+  assert.equal(Number(closedAllocations.rows.find(r=>r.status==='failed')?.count??0),1);
+  const closedMatch=await db.query('select assembly_state,ended_at from matches where id=$1',[sharedMatchId]);
+  assert.equal(closedMatch.rows[0].assembly_state,'closed');
+  assert.ok(closedMatch.rows[0].ended_at);
+  const releasedLoad=await db.query('select active_allocations from game_server_nodes where server_id=$1',['LAB-TEN']);
+  assert.equal(Number(releasedLoad.rows[0].active_allocations),0);
+  const releasedRoster=await db.query('select connection_state,ready from match_player_slots where match_id=$1',[sharedMatchId]);
+  assert.ok(releasedRoster.rows.every(r=>r.connection_state==='disconnected'&&r.ready===false));
+
+  // The server credential remains valid after atomic match release.
   const heartbeat=await nodePost('/v1/servers/heartbeat',{serverId:'LAB-TEN',status:'ready'},'LAB-TEN',node.nodeCredential);
   assert.equal(heartbeat.status,200);
 });
