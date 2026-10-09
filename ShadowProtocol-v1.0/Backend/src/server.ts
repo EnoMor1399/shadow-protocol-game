@@ -426,15 +426,15 @@ app.post('/v1/servers/release-match',async(req,reply)=>{
   const client=await pool.connect();
   try{
     await client.query('begin');
-    const foreign=await client.query(`select 1 from server_allocations
-      where match_id=$1 and node_id is distinct from $2::uuid and status not in ('closed','failed') limit 1`,
-      [parsed.data.matchId,node.nodeId]);
-    if(foreign.rowCount){await client.query('rollback');return reply.code(409).send({error:'match-spans-multiple-nodes'});}
-
     const owned=await client.query(`select 1 from server_allocations
       where match_id=$1 and node_id=$2 and status not in ('closed','failed') limit 1`,
       [parsed.data.matchId,node.nodeId]);
     if(!owned.rowCount){await client.query('rollback');return reply.code(403).send({error:'match-node-ownership-required'});}
+
+    const foreign=await client.query(`select 1 from server_allocations
+      where match_id=$1 and node_id is distinct from $2::uuid and status not in ('closed','failed') limit 1`,
+      [parsed.data.matchId,node.nodeId]);
+    if(foreign.rowCount){await client.query('rollback');return reply.code(409).send({error:'match-spans-multiple-nodes'});}
 
     const released=await client.query(`update server_allocations
       set status=$3,ended_at=coalesce(ended_at,now())
