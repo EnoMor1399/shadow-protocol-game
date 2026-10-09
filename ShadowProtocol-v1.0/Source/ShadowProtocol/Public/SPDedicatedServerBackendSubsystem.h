@@ -99,6 +99,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FSPDedicatedServerHeartbeat, FStr
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPDedicatedServerAdmissionCompleted, FSPDedicatedServerAdmission, Admission);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FSPDedicatedServerAdmissionFailed, FString, AllocationId, FString, MatchId, FString, RequestId, FString, ErrorMessage);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FSPDedicatedServerAllocationReleased, FString, AllocationId, FString, MatchId, FString, Status, int32, ActiveAllocations);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FSPDedicatedServerMatchReleased, FString, MatchId, FString, Status, int32, ReleasedAllocations, int32, ActiveAllocations);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPDedicatedServerDrainChanged, bool, bDraining);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSPDedicatedServerCredentialRotated, FString, CredentialExpiresAt);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSPDedicatedServerBackendFailed, FString, Context, FString, ErrorMessage);
@@ -138,6 +139,9 @@ public:
     FSPDedicatedServerAllocationReleased OnAllocationReleased;
 
     UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Dedicated Server")
+    FSPDedicatedServerMatchReleased OnMatchReleased;
+
+    UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Dedicated Server")
     FSPDedicatedServerDrainChanged OnDrainChanged;
 
     UPROPERTY(BlueprintAssignable, Category="Shadow Protocol|Dedicated Server")
@@ -166,6 +170,9 @@ public:
 
     UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Dedicated Server")
     void ReleaseAllocation(const FString& AllocationId, const FString& MatchId, bool bFailed = false);
+
+    UFUNCTION(BlueprintCallable, Category="Shadow Protocol|Dedicated Server")
+    void ReleaseMatch(const FString& MatchId, bool bFailed = false);
 
     UFUNCTION(BlueprintPure, Category="Shadow Protocol|Dedicated Server")
     bool IsConfigured() const { return bConfigured; }
@@ -229,5 +236,6 @@ private:
     void HandleDrainResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void HandleAdmissionResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, FString AllocationId, FString MatchId, FString RequestId, FString ReconnectGrantId);
     void HandleReleaseResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
+    void HandleMatchReleaseResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
     void BroadcastHttpFailure(const FString& Context, FHttpResponsePtr Response, bool bWasSuccessful);
 };
