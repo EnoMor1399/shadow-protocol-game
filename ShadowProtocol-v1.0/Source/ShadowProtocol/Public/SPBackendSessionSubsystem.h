@@ -271,7 +271,7 @@ private:
     bool ConsumeAuthenticatedResponse(FHttpRequestPtr Request);
     void CancelAuthenticatedRequests();
     void CancelPlatformSessionRequest();
-    FString BackendBaseUrl = TEXT("http://127.0.0.1:8080");
+    FString BackendBaseUrl = TEXT("https://shadow-protocol-game.onrender.com");
     FString SessionId;
     FString SessionToken;
     FString SessionRegion;
