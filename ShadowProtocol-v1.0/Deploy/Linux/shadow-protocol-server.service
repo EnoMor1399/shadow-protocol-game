@@ -1,0 +1,26 @@
+[Unit]
+Description=Shadow Protocol Dedicated Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shadowprotocol
+Group=shadowprotocol
+WorkingDirectory=/opt/shadow-protocol/orchestrator
+EnvironmentFile=/etc/shadow-protocol/server.env
+ExecStart=/usr/bin/node /opt/shadow-protocol/orchestrator/dist/launcher.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=35
+KillSignal=SIGTERM
+KillMode=mixed
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/shadow-protocol /var/lib/shadow-protocol /var/log/shadow-protocol
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

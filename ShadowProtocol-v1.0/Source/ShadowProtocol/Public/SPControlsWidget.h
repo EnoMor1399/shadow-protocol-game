@@ -1,0 +1,101 @@
+#pragma once
+#include "CoreMinimal.h"
+#include "Blueprint/UserWidget.h"
+#include "Components/ComboBoxString.h"
+#include "Framework/Commands/InputChord.h"
+#include "SPControlsWidget.generated.h"
+class UTextBlock;
+class USlider;
+class UCheckBox;
+class UButton;
+class UInputKeySelector;
+
+UCLASS()
+class SHADOWPROTOCOL_API USPControlsWidget : public UUserWidget
+{
+    GENERATED_BODY()
+public:
+    virtual void NativeConstruct() override;
+    void FocusPrimaryControl();
+protected:
+    virtual TSharedRef<SWidget> RebuildWidget() override;
+    virtual FReply NativeOnPreviewKeyDown(const FGeometry& Geometry, const FKeyEvent& Event) override;
+private:
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> SensitivityLabel;
+    UPROPERTY(Transient) TObjectPtr<USlider> SensitivitySlider;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> AimSensitivityLabel;
+    UPROPERTY(Transient) TObjectPtr<USlider> AimSensitivitySlider;
+    UFUNCTION() void SetAimSensitivity(float Value);
+    UPROPERTY(Transient) TObjectPtr<UCheckBox> InvertCheck;
+    UPROPERTY(Transient) TObjectPtr<UCheckBox> ToggleAimCheck;
+    UFUNCTION() void SetToggleAim(bool bEnabled);
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> GamepadSensitivityLabel;
+    UPROPERTY(Transient) TObjectPtr<USlider> GamepadSensitivitySlider;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> GamepadAimSensitivityLabel;
+    UPROPERTY(Transient) TObjectPtr<USlider> GamepadAimSensitivitySlider;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> GamepadDeadZoneLabel;
+    UPROPERTY(Transient) TObjectPtr<USlider> GamepadDeadZoneSlider;
+    UPROPERTY(Transient) TObjectPtr<UCheckBox> GamepadInvertCheck;
+    UFUNCTION() void SetGamepadSensitivity(float Value);
+    UFUNCTION() void SetGamepadAimSensitivity(float Value);
+    UFUNCTION() void SetGamepadDeadZone(float Value);
+    UFUNCTION() void SetGamepadInvert(bool bEnabled);
+    UFUNCTION() void ResetGamepadDefaults();
+    UPROPERTY(Transient) TObjectPtr<UButton> ResumeButton;
+    UPROPERTY(Transient) TObjectPtr<UCheckBox> ContrastCheck;
+    UPROPERTY(Transient) TObjectPtr<UCheckBox> CrosshairCheck;
+    UPROPERTY(Transient) TObjectPtr<UCheckBox> HintsCheck;
+    UPROPERTY(Transient) TObjectPtr<UCheckBox> ScoreboardToggleCheck;
+    UFUNCTION() void SetScoreboardToggle(bool bEnabled);
+    UPROPERTY(Transient) TObjectPtr<USlider> CrosshairSlider;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> CrosshairLabel;
+    UFUNCTION() void SetHUDContrast(bool bEnabled);
+    UFUNCTION() void SetCrosshairVisible(bool bEnabled);
+    UFUNCTION() void SetHUDHints(bool bEnabled);
+    UFUNCTION() void SetCrosshairScale(float Value);
+    UFUNCTION() void ResetHUDPreferences();
+    UPROPERTY(Transient) TArray<TObjectPtr<UInputKeySelector>> MovementSelectors;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> MovementFeedback;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> MovementSummary;
+    void StageMovementKeys(const TArray<FKey>& Keys);
+    UFUNCTION() void ApplyMovementKeys();
+    UFUNCTION() void UseWASD();
+    UFUNCTION() void UseArrowKeys();
+    UFUNCTION() void RefreshMovementKeys();
+    UPROPERTY(Transient) TObjectPtr<UComboBoxString> BindingAction;
+    UPROPERTY(Transient) TObjectPtr<UInputKeySelector> BindingKey;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> BindingFeedback;
+    UPROPERTY(Transient) TObjectPtr<UComboBoxString> GamepadBindingAction;
+    UPROPERTY(Transient) TObjectPtr<UInputKeySelector> GamepadBindingKey;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> GamepadBindingFeedback;
+    UPROPERTY(Transient) TObjectPtr<UButton> ConfirmGamepadSwapButton;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> ConfirmGamepadSwapText;
+    FName PendingGamepadSwapAction = NAME_None;
+    FName PendingGamepadConflictAction = NAME_None;
+    FKey PendingGamepadSwapKey;
+    bool bSynchronizingGamepadBinding = false;
+    void RefreshGamepadBinding();
+    void ClearPendingGamepadSwap();
+    UFUNCTION() void ChooseGamepadBindingAction(FString Selection, ESelectInfo::Type SelectionType);
+    UFUNCTION() void CaptureGamepadBinding(FInputChord Chord);
+    UFUNCTION() void ConfirmPendingGamepadSwap();
+    UFUNCTION() void ResetGamepadBindings();
+    UPROPERTY(Transient) TObjectPtr<UButton> ConfirmSwapButton;
+    UPROPERTY(Transient) TObjectPtr<UTextBlock> ConfirmSwapText;
+    UPROPERTY(Transient) TMap<FName, TObjectPtr<UTextBlock>> BindingLabels;
+    TMap<FString, FName> ActionNames;
+    FName PendingSwapAction = NAME_None;
+    FName PendingConflictAction = NAME_None;
+    FKey PendingSwapKey;
+    bool bSynchronizingBinding = false;
+    void RefreshBindings();
+    void ClearPendingSwap();
+    UFUNCTION() void ChooseBindingAction(FString Selection, ESelectInfo::Type SelectionType);
+    UFUNCTION() void CaptureBinding(FInputChord Chord);
+    UFUNCTION() void ConfirmPendingSwap();
+    UFUNCTION() void ResetBindings();
+    UFUNCTION() void SetSensitivity(float Value);
+    UFUNCTION() void SetInvert(bool bChecked);
+    UFUNCTION() void ResetDefaults();
+    UFUNCTION() void CloseControls();
+};

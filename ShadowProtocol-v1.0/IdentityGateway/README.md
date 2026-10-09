@@ -1,0 +1,67 @@
+# Shadow Protocol Identity Gateway
+
+This service is the trust boundary between shipped Unreal clients and the gameplay backend.
+
+## Flow
+
+1. Unreal signs in through its active Steam or EOS OnlineSubsystem.
+2. Unreal sends a provider credential to this gateway only.
+3. The gateway verifies the credential server-side.
+4. The gateway derives the provider subject from the verified provider response.
+5. It signs a short-lived assertion containing provider, subject, region, network build and SHA-256(device nonce).
+6. Unreal exchanges that assertion with the gameplay backend.
+7. The gameplay backend rechecks the assertion signature, lifetime, replay state, build and device-nonce binding.
+
+Never deploy the provider publisher/API keys or the assertion signing secret in the game client.
+
+## Steam
+
+The Steam adapter calls the official server-side `ISteamUserAuth/AuthenticateUserTicket/v1/` endpoint. Configure:
+
+- `STEAM_WEB_API_KEY`
+- `STEAM_APP_ID`
+- `STEAM_WEB_API_IDENTITY`
+
+The client credential must be a hexadecimal Steam Web API authentication ticket for the configured identity.
+
+## EOS
+
+EOS token verification is provided by the EOS SDK. The Node gateway therefore delegates EOS verification to an HTTPS, server-controlled verifier service configured with:
+
+- `EOS_VERIFIER_URL`
+- `EOS_VERIFIER_SHARED_SECRET`
+- optional expected product/sandbox/deployment IDs.
+
+That service must use `EOS_Auth_VerifyIdToken` or `EOS_Connect_VerifyIdToken` and return a subject only after an EOS success result. The gateway fails closed when the verifier is unavailable or metadata does not match.
+
+## Abuse controls
+
+The gateway applies two bounded in-memory fixed-window limits before provider verification:
+
+- source IP attempts;
+- HMAC-fingerprinted provider credential attempts.
+
+Raw provider tokens are never stored by the limiter. Defaults are 30 IP attempts and 5 attempts per provider credential in a 60-second window. These controls are intentionally local to one process. A multi-instance deployment should also enforce distributed rate limiting at the ingress/WAF or a shared store.
+
+The gateway disables Fastify request logging and redacts authorization, provider-token and device-nonce fields. Provider verification failures return generic client errors instead of forwarding provider response bodies.
+
+## Local commands
+
+```bash
+npm install
+npm run typecheck
+npm test
+npm run build
+npm start
+```
+
+For container deployment:
+
+```bash
+docker build -t shadow-protocol-identity-gateway .
+docker run --rm -p 8090:8090 --env-file .env shadow-protocol-identity-gateway
+```
+
+The runtime image runs as the unprivileged Node user and includes an HTTP health check.
+
+Copy `.env.example` into your secret-management/deployment system. Do not commit populated secrets.
