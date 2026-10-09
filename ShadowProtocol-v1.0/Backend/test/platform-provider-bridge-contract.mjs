@@ -18,11 +18,24 @@ test('platform identity bridge accepts only authenticated Steam or EOS providers
   assert.match(cpp, /GetIdentityInterface\(\)/);
   assert.match(cpp, /GetLoginStatus\(0\) == ELoginStatus::LoggedIn/);
   assert.match(cpp, /AutoLogin\(0\)/);
+  assert.match(cpp, /GetLinkedAccountAuthToken/);
+  assert.match(cpp, /WebAPI:shadow-protocol/);
+  assert.match(cpp, /HandleSteamWebApiToken/);
   assert.match(cpp, /GetAuthToken\(0\)/);
   assert.match(cpp, /Raw\.Contains\(TEXT\("STEAM"\)\)/);
   assert.match(cpp, /Raw\.Contains\(TEXT\("EOS"\)\)/);
   assert.match(cpp, /Production identity requires a supported Steam or EOS provider/);
   assert.doesNotMatch(cpp, /PendingProvider == TEXT\("null"\)/);
+});
+
+test('project packages the Steam online subsystem without exposing server credentials', async () => {
+  const project = await source('../../ShadowProtocol.uproject');
+  const build = await source('../../Source/ShadowProtocol/ShadowProtocol.Build.cs');
+
+  assert.match(project, /"OnlineSubsystemSteam","Enabled":true/);
+  assert.match(build, /DynamicallyLoadedModuleNames\.Add\("OnlineSubsystemSteam"\)/);
+  assert.doesNotMatch(project, /STEAM_WEB_API_KEY/);
+  assert.doesNotMatch(build, /STEAM_WEB_API_KEY/);
 });
 
 test('provider token travels only to the configured trusted gateway', async () => {
