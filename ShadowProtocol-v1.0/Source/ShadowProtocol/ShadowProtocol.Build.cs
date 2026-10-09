@@ -10,5 +10,6 @@ public class ShadowProtocol : ModuleRules
             "NavigationSystem", "OnlineSubsystem", "OnlineSubsystemUtils", "NetCore",
             "HTTP", "Json", "JsonUtilities"
         });
+        DynamicallyLoadedModuleNames.Add("OnlineSubsystemSteam");
     }
 }
