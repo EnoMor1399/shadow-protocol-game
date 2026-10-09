@@ -687,6 +687,28 @@ void USPDedicatedServerBackendSubsystem::ReleaseAllocation(const FString& Alloca
     }
 }
 
+void USPDedicatedServerBackendSubsystem::ReleaseMatch(const FString& MatchId, bool bFailed)
+{
+    if (!bConfigured || !bRegistered || MatchId.IsEmpty())
+    {
+        OnRequestFailed.Broadcast(TEXT("match-release"), TEXT("Dedicated-server match release data is incomplete."));
+        return;
+    }
+
+    const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+    Payload->SetStringField(TEXT("matchId"), MatchId);
+    Payload->SetStringField(TEXT("outcome"), bFailed ? TEXT("failed") : TEXT("closed"));
+
+    const TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = CreateInfrastructureJsonRequest(TEXT("/v1/servers/release-match"), TEXT("POST"));
+    Request->SetContentAsString(SerializeJson(Payload));
+    Request->OnProcessRequestComplete().BindUObject(this, &USPDedicatedServerBackendSubsystem::HandleMatchReleaseResponse);
+
+    if (!Request->ProcessRequest())
+    {
+        OnRequestFailed.Broadcast(TEXT("match-release"), TEXT("Unable to start match release request."));
+    }
+}
+
 void USPDedicatedServerBackendSubsystem::HandleReleaseResponse(FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
 {
     if (!bWasSuccessful || !Response.IsValid() || Response->GetResponseCode() < 200 || Response->GetResponseCode() >= 300)
@@ -711,6 +733,43 @@ void USPDedicatedServerBackendSubsystem::HandleReleaseResponse(FHttpRequestPtr, 
     JsonObject->TryGetStringField(TEXT("status"), Status);
     JsonObject->TryGetNumberField(TEXT("activeAllocations"), ActiveAllocationsValue);
     OnAllocationReleased.Broadcast(AllocationId, MatchId, Status, FMath::RoundToInt(ActiveAllocationsValue));
+}
+
+void USPDedicatedServerBackendSubsystem::HandleMatchReleaseResponse(FHttpRequestPtr, FHttpResponsePtr Response, bool bWasSuccessful)
+{
+    if (!bWasSuccessful || !Response.IsValid() || Response->GetResponseCode() < 200 || Response->GetResponseCode() >= 300)
+    {
+        BroadcastHttpFailure(TEXT("match-release"), Response, bWasSuccessful);
+        return;
+    }
+
+    TSharedPtr<FJsonObject> JsonObject;
+    if (!ParseJsonObject(Response->GetContentAsString(), JsonObject))
+    {
+        OnRequestFailed.Broadcast(TEXT("match-release"), TEXT("Backend returned invalid match-release JSON."));
+        return;
+    }
+
+    FString MatchId;
+    FString Status;
+    double ReleasedAllocationsValue = 0.0;
+    double ActiveAllocationsValue = 0.0;
+    JsonObject->TryGetStringField(TEXT("matchId"), MatchId);
+    JsonObject->TryGetStringField(TEXT("status"), Status);
+    JsonObject->TryGetNumberField(TEXT("releasedAllocations"), ReleasedAllocationsValue);
+    JsonObject->TryGetNumberField(TEXT("activeAllocations"), ActiveAllocationsValue);
+
+    if (MatchId.IsEmpty() || Status.IsEmpty())
+    {
+        OnRequestFailed.Broadcast(TEXT("match-release"), TEXT("Backend match-release response is missing required metadata."));
+        return;
+    }
+
+    OnMatchReleased.Broadcast(
+        MatchId,
+        Status,
+        FMath::RoundToInt(ReleasedAllocationsValue),
+        FMath::RoundToInt(ActiveAllocationsValue));
 }
 
 void USPDedicatedServerBackendSubsystem::SendBestEffortShutdownDrain()
