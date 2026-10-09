@@ -247,6 +247,8 @@ void USPDedicatedServerBackendSubsystem::HandleRegistrationResponse(FHttpRequest
     }
     bRegistered = true;
     bDraining = false;
+    bHeartbeatHealthy = true;
+    ConsecutiveHeartbeatFailures = 0;
     StartCredentialRotation(Registration.CredentialTtlMs);
     if (bRestoreDrain)
     {
@@ -414,6 +416,8 @@ void USPDedicatedServerBackendSubsystem::RecoverNodeRegistration()
     StopCredentialRotation();
     bRegistered = false;
     bDraining = false;
+    bHeartbeatHealthy = false;
+    ConsecutiveHeartbeatFailures = 0;
     bRestoreDrainAfterRegistration = bWasDraining;
     NodeCredential.Empty();
 
@@ -426,6 +430,29 @@ void USPDedicatedServerBackendSubsystem::RecoverNodeRegistration()
     }
 
     RegisterNode();
+}
+
+void USPDedicatedServerBackendSubsystem::RecordHeartbeatSuccess()
+{
+    ConsecutiveHeartbeatFailures = 0;
+    if (!bDraining)
+    {
+        bHeartbeatHealthy = true;
+    }
+}
+
+void USPDedicatedServerBackendSubsystem::RecordHeartbeatFailure(const FString& Reason)
+{
+    ++ConsecutiveHeartbeatFailures;
+    if (ConsecutiveHeartbeatFailures >= HeartbeatFailureThreshold)
+    {
+        bHeartbeatHealthy = false;
+        OnRequestFailed.Broadcast(
+            TEXT("server-heartbeat-health"),
+            FString::Printf(TEXT("Dedicated server stopped accepting new admissions after %d consecutive heartbeat failures: %s"),
+                ConsecutiveHeartbeatFailures,
+                *Reason));
+    }
 }
 
 void USPDedicatedServerBackendSubsystem::SendHeartbeat()
@@ -445,7 +472,9 @@ void USPDedicatedServerBackendSubsystem::SendHeartbeat()
 
     if (!Request->ProcessRequest())
     {
-        OnRequestFailed.Broadcast(TEXT("server-heartbeat"), TEXT("Unable to start dedicated-server heartbeat request."));
+        const FString Error = TEXT("Unable to start dedicated-server heartbeat request.");
+        OnRequestFailed.Broadcast(TEXT("server-heartbeat"), Error);
+        RecordHeartbeatFailure(Error);
     }
 }
 
@@ -453,6 +482,7 @@ void USPDedicatedServerBackendSubsystem::HandleHeartbeatResponse(FHttpRequestPtr
 {
     if (bWasSuccessful && Response.IsValid() && Response->GetResponseCode() == 401)
     {
+        bHeartbeatHealthy = false;
         BroadcastHttpFailure(TEXT("server-heartbeat"), Response, bWasSuccessful);
         RecoverNodeRegistration();
         return;
@@ -460,14 +490,20 @@ void USPDedicatedServerBackendSubsystem::HandleHeartbeatResponse(FHttpRequestPtr
 
     if (!bWasSuccessful || !Response.IsValid() || Response->GetResponseCode() < 200 || Response->GetResponseCode() >= 300)
     {
+        const FString Error = Response.IsValid()
+            ? FString::Printf(TEXT("Heartbeat HTTP %d"), Response->GetResponseCode())
+            : TEXT("Heartbeat transport failed.");
         BroadcastHttpFailure(TEXT("server-heartbeat"), Response, bWasSuccessful);
+        RecordHeartbeatFailure(Error);
         return;
     }
 
     TSharedPtr<FJsonObject> JsonObject;
     if (!ParseJsonObject(Response->GetContentAsString(), JsonObject))
     {
-        OnRequestFailed.Broadcast(TEXT("server-heartbeat"), TEXT("Backend returned invalid heartbeat JSON."));
+        const FString Error = TEXT("Backend returned invalid heartbeat JSON.");
+        OnRequestFailed.Broadcast(TEXT("server-heartbeat"), Error);
+        RecordHeartbeatFailure(Error);
         return;
     }
 
@@ -477,6 +513,14 @@ void USPDedicatedServerBackendSubsystem::HandleHeartbeatResponse(FHttpRequestPtr
     JsonObject->TryGetStringField(TEXT("server_id"), ReturnedServerId);
     JsonObject->TryGetStringField(TEXT("status"), Status);
     JsonObject->TryGetNumberField(TEXT("active_allocations"), ActiveAllocationsValue);
+    if (!ReturnedServerId.Equals(ServerId, ESearchCase::CaseSensitive) || Status.IsEmpty())
+    {
+        const FString Error = TEXT("Heartbeat response did not match the registered server identity.");
+        OnRequestFailed.Broadcast(TEXT("server-heartbeat"), Error);
+        RecordHeartbeatFailure(Error);
+        return;
+    }
+    RecordHeartbeatSuccess();
     OnHeartbeat.Broadcast(ReturnedServerId, Status, FMath::RoundToInt(ActiveAllocationsValue));
 }
 
@@ -488,6 +532,7 @@ void USPDedicatedServerBackendSubsystem::MarkDraining()
     }
 
     StopHeartbeat();
+    bHeartbeatHealthy = false;
 
     const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
     Payload->SetStringField(TEXT("serverId"), ServerId);
@@ -517,7 +562,7 @@ void USPDedicatedServerBackendSubsystem::HandleDrainResponse(FHttpRequestPtr, FH
 
 void USPDedicatedServerBackendSubsystem::AdmitConnection(const FString& AllocationId, const FString& MatchId, const FString& ConnectToken, const FString& RequestId, const FString& ReconnectGrantId, int32 RoundNumber)
 {
-    if (!bConfigured || !bRegistered || bDraining || AllocationId.IsEmpty() || MatchId.IsEmpty() || ConnectToken.IsEmpty())
+    if (!bConfigured || !bRegistered || bDraining || !bHeartbeatHealthy || AllocationId.IsEmpty() || MatchId.IsEmpty() || ConnectToken.IsEmpty())
     {
         OnRequestFailed.Broadcast(TEXT("connection-admission"), TEXT("Dedicated server is not ready for connection admission or admission data is incomplete."));
         OnAdmissionFailed.Broadcast(AllocationId, MatchId, RequestId, TEXT("Admission service unavailable."));
@@ -682,6 +727,7 @@ void USPDedicatedServerBackendSubsystem::SendBestEffortShutdownDrain()
     Request->SetContentAsString(SerializeJson(Payload));
     Request->ProcessRequest();
     bDraining = true;
+    bHeartbeatHealthy = false;
 }
 
 void USPDedicatedServerBackendSubsystem::BroadcastHttpFailure(const FString& Context, FHttpResponsePtr Response, bool bWasSuccessful)
