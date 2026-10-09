@@ -177,6 +177,9 @@ public:
     bool IsDraining() const { return bDraining; }
 
     UFUNCTION(BlueprintPure, Category="Shadow Protocol|Dedicated Server")
+    bool IsHeartbeatHealthy() const { return bHeartbeatHealthy; }
+
+    UFUNCTION(BlueprintPure, Category="Shadow Protocol|Dedicated Server")
     FString GetServerId() const { return ServerId; }
 
     UFUNCTION(BlueprintPure, Category="Shadow Protocol|Dedicated Server")
@@ -196,6 +199,9 @@ private:
     bool bConfigured = false;
     bool bRegistered = false;
     bool bDraining = false;
+    bool bHeartbeatHealthy = false;
+    int32 ConsecutiveHeartbeatFailures = 0;
+    int32 HeartbeatFailureThreshold = 3;
     bool bRestoreDrainAfterRegistration = false;
     bool bRegistrationWasAttested = false;
     float HeartbeatIntervalSeconds = 10.0f;
@@ -213,6 +219,8 @@ private:
     void StartCredentialRotation(int32 CredentialTtlMs);
     void StopCredentialRotation();
     void RecoverNodeRegistration();
+    void RecordHeartbeatSuccess();
+    void RecordHeartbeatFailure(const FString& Reason);
     void SendBestEffortShutdownDrain();
 
     void HandleRegistrationResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful);
