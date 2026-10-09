@@ -108,3 +108,25 @@ jobs:
         run: npm run db:init
       - name: Test persisted allocation and reconnect lifecycle
         run: npm run test:postgres
+
+  server-orchestrator:
+    name: Server orchestrator verification
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ShadowProtocol-v1.0/ServerOrchestrator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ShadowProtocol-v1.0/ServerOrchestrator/package.json
+      - name: Install server orchestrator dependencies
+        run: npm install --no-audit --no-fund
+      - name: Typecheck server orchestrator
+        run: npm run typecheck
+      - name: Build server orchestrator
+        run: npm run build
+      - name: Test launch attestation and secret isolation
+        run: npm test
