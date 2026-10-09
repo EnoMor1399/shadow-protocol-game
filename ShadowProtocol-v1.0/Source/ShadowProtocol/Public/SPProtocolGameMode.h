@@ -95,6 +95,7 @@ protected:
     void UpdatePendingAdmissions();
     UFUNCTION() void HandleBackendAdmissionCompleted(FSPDedicatedServerAdmission Admission);
     UFUNCTION() void HandleBackendAdmissionFailed(FString AllocationId, FString MatchId, FString RequestId, FString ErrorMessage);
+    UFUNCTION() void HandleBackendMatchReleased(FString MatchId, FString Status, int32 ReleasedAllocations, int32 ActiveAllocations);
 
     TMap<FString,FSPPendingPlayerAdmission> PendingAdmissions;
     TMap<int32,float> ReconnectDeadlines;
