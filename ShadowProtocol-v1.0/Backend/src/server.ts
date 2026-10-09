@@ -417,6 +417,54 @@ app.post('/v1/servers/release-allocation',async(req,reply)=>{
   }catch(error){await client.query('rollback');throw error;}finally{client.release();}
 });
 
+
+const matchReleaseSchema=z.object({matchId:z.string().uuid(),outcome:z.enum(['closed','failed']).default('closed')});
+app.post('/v1/servers/release-match',async(req,reply)=>{
+  const node=await requireNodeCredential(req,reply);if(!node)return;
+  const parsed=matchReleaseSchema.safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:parsed.error.flatten()});
+  if(!pool)return reply.code(503).send({error:'database-not-configured'});
+  const client=await pool.connect();
+  try{
+    await client.query('begin');
+    const foreign=await client.query(`select 1 from server_allocations
+      where match_id=$1 and node_id is distinct from $2::uuid and status not in ('closed','failed') limit 1`,
+      [parsed.data.matchId,node.nodeId]);
+    if(foreign.rowCount){await client.query('rollback');return reply.code(409).send({error:'match-spans-multiple-nodes'});}
+
+    const owned=await client.query(`select 1 from server_allocations
+      where match_id=$1 and node_id=$2 and status not in ('closed','failed') limit 1`,
+      [parsed.data.matchId,node.nodeId]);
+    if(!owned.rowCount){await client.query('rollback');return reply.code(403).send({error:'match-node-ownership-required'});}
+
+    const released=await client.query(`update server_allocations
+      set status=$3,ended_at=coalesce(ended_at,now())
+      where match_id=$1 and node_id=$2 and status not in ('closed','failed')
+      returning id`,[parsed.data.matchId,node.nodeId,parsed.data.outcome]);
+    const releasedAllocations=released.rowCount??0;
+
+    const nodeState=await client.query(`update game_server_nodes
+      set active_allocations=greatest(0,active_allocations-$2),updated_at=now()
+      where id=$1 returning active_allocations,status`,[node.nodeId,releasedAllocations]);
+
+    await client.query(`update matches
+      set assembly_state=$2,ended_at=coalesce(ended_at,now())
+      where id=$1`,[parsed.data.matchId,parsed.data.outcome]);
+    await client.query(`update match_player_slots
+      set connection_state='disconnected',ready=false
+      where match_id=$1`,[parsed.data.matchId]);
+
+    await client.query('commit');
+    return reply.send({
+      released:true,
+      matchId:parsed.data.matchId,
+      serverId:node.serverId,
+      status:parsed.data.outcome,
+      releasedAllocations,
+      activeAllocations:Number(nodeState.rows[0]?.active_allocations??0)
+    });
+  }catch(error){await client.query('rollback');throw error;}finally{client.release();}
+});
+
 const gameSessionSchema=z.object({userId:z.string().uuid(),region:z.string().min(2).max(16),build:z.string().min(2).max(32),deviceNonce:z.string().min(8).max(128)});
 app.post('/v1/auth/game-session',async(req,reply)=>{
   // Migration-only trusted gateway path. Production defaults this route off.
