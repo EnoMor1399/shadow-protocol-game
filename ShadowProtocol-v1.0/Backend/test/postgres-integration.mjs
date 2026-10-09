@@ -629,6 +629,18 @@ test('assembles ten solo allocations into one shared 5v5 Protocol match', async 
   assert.equal(registration.status,200);
   const node=await registration.json();
 
+  const otherBody={
+    serverId:'LAB-OTHER',
+    region:'otherlab',
+    networkBuild:'SP-1.0.1',
+    publicHost:'10.20.0.11',
+    publicPort:7791,
+    capacity:10
+  };
+  const otherRegistration=await bootstrapPost('/v1/servers/register',otherBody,issueServerAttestation(otherBody));
+  assert.equal(otherRegistration.status,200);
+  const otherNode=await otherRegistration.json();
+
   const allocations=[];
   for(let index=0;index<10;index+=1){
     const suffix=String(index).padStart(2,'0');
@@ -733,7 +745,7 @@ test('assembles ten solo allocations into one shared 5v5 Protocol match', async 
   assert.equal((await overflow.json()).error,'no-healthy-game-server');
 
   const wrongNodeRelease=await nodePost('/v1/servers/release-match',
-    {matchId:sharedMatchId,outcome:'closed'},PRIMARY_SERVER_ID,primaryCredential);
+    {matchId:sharedMatchId,outcome:'closed'},'LAB-OTHER',otherNode.nodeCredential);
   assert.equal(wrongNodeRelease.status,403);
   assert.equal((await wrongNodeRelease.json()).error,'match-node-ownership-required');
 
