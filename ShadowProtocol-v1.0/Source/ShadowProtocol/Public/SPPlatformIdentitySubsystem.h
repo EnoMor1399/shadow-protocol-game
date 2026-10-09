@@ -73,6 +73,7 @@ private:
     bool ValidateGatewayUrl(FString& OutError) const;
     void ContinueWithLoggedInIdentity(uint64 Generation);
     void HandleLoginComplete(int32 LocalUserNum, bool bWasSuccessful, const FUniqueNetId& UserId, const FString& Error, uint64 Generation);
+    void HandleSteamWebApiToken(int32 LocalUserNum, bool bWasSuccessful, const FExternalAuthToken& AuthToken, uint64 Generation);
     void SubmitProviderToken(const FString& AuthToken, const FString& AuthType, uint64 Generation);
     void HandleGatewayResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, uint64 Generation);
     void ClearLoginDelegate();
