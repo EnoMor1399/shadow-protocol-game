@@ -60,6 +60,7 @@ void ASPProtocolGameMode::BeginPlay()
         {
             Backend->OnAdmissionCompleted.AddDynamic(this, &ASPProtocolGameMode::HandleBackendAdmissionCompleted);
             Backend->OnAdmissionFailed.AddDynamic(this, &ASPProtocolGameMode::HandleBackendAdmissionFailed);
+            Backend->OnMatchReleased.AddDynamic(this, &ASPProtocolGameMode::HandleBackendMatchReleased);
         }
     }
 
@@ -82,8 +83,14 @@ void ASPProtocolGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
     if (USPDedicatedServerBackendSubsystem* Backend = GetDedicatedServerBackend())
     {
+        if (IsDedicatedAdmissionRequired() && !ActiveBackendMatchId.IsEmpty() && !bBackendMatchReleaseRequested)
+        {
+            bBackendMatchReleaseRequested = true;
+            Backend->ReleaseMatch(ActiveBackendMatchId, true);
+        }
         Backend->OnAdmissionCompleted.RemoveDynamic(this, &ASPProtocolGameMode::HandleBackendAdmissionCompleted);
         Backend->OnAdmissionFailed.RemoveDynamic(this, &ASPProtocolGameMode::HandleBackendAdmissionFailed);
+        Backend->OnMatchReleased.RemoveDynamic(this, &ASPProtocolGameMode::HandleBackendMatchReleased);
     }
     PendingAdmissions.Reset();
     AdmittedPlayerMatches.Reset();
@@ -465,7 +472,7 @@ void ASPProtocolGameMode::PromoteAdmittedPlayer(APlayerController* PlayerControl
     const auto* Backend = GetDedicatedServerBackend();
     if (!Pending->bRequestStarted || Pending->DeadlineRealSeconds <= FPlatformTime::Seconds()
         || !OnlineSession || !OnlineSession->IsAcceptingAdmissions()
-        || !Backend || !Backend->IsRegistered() || Backend->IsDraining())
+        || !Backend || !Backend->IsRegistered() || Backend->IsDraining() || !Backend->IsHeartbeatHealthy())
     {
         RejectPendingAdmission(Admission.AllocationId, TEXT("Admission expired or server became unavailable."));
         return;
@@ -479,6 +486,11 @@ void ASPProtocolGameMode::PromoteAdmittedPlayer(APlayerController* PlayerControl
     }
 
     auto* GS = GetGameState<ASPProtocolGameState>();
+    if (!ActiveBackendMatchId.IsEmpty() && ActiveBackendMatchId != Admission.MatchId)
+    {
+        RejectPendingAdmission(Admission.AllocationId, TEXT("Admission targets a different active backend match."));
+        return;
+    }
     for (APlayerState* BasePS : GameState->PlayerArray)
     {
         const auto* Existing = Cast<ASPPlayerState>(BasePS);
@@ -538,6 +550,11 @@ void ASPProtocolGameMode::PromoteAdmittedPlayer(APlayerController* PlayerControl
 
     PendingAdmissions.Remove(Admission.AllocationId);
 
+    if (ActiveBackendMatchId.IsEmpty())
+    {
+        ActiveBackendMatchId = Admission.MatchId;
+        bBackendMatchReleaseRequested = false;
+    }
     AdmittedPlayerMatches.Add(Admission.UserId, Admission.MatchId);
     PS->AuthenticatedUserId = Admission.UserId;
     PS->AuthenticatedSessionId = Admission.UserId;
@@ -548,6 +565,18 @@ void ASPProtocolGameMode::PromoteAdmittedPlayer(APlayerController* PlayerControl
     RefreshCompetitiveSlots();
 
     Super::HandleStartingNewPlayer_Implementation(PlayerController);
+}
+
+void ASPProtocolGameMode::HandleBackendMatchReleased(FString MatchId, FString, int32, int32)
+{
+    if (MatchId.IsEmpty() || MatchId != ActiveBackendMatchId)
+    {
+        return;
+    }
+
+    ActiveBackendMatchId.Reset();
+    bBackendMatchReleaseRequested = false;
+    AdmittedPlayerMatches.Reset();
 }
 
 void ASPProtocolGameMode::HandleBackendAdmissionFailed(FString AllocationId, FString MatchId, FString RequestId, FString ErrorMessage)
@@ -842,6 +871,14 @@ void ASPProtocolGameMode::FinishRound(ESPTeam Winner,const FString& Reason)
     if(bMatchWon)
     {
         if (auto* OnlineSession = Cast<ASPOnlineGameSession>(GameSession)) OnlineSession->EndProtocolSession();
+        if (IsDedicatedAdmissionRequired() && !ActiveBackendMatchId.IsEmpty() && !bBackendMatchReleaseRequested)
+        {
+            if (USPDedicatedServerBackendSubsystem* Backend = GetDedicatedServerBackend())
+            {
+                bBackendMatchReleaseRequested = true;
+                Backend->ReleaseMatch(ActiveBackendMatchId, false);
+            }
+        }
         GS->bMatchComplete=true;
         GS->MatchPhase=ESPMatchPhase::MatchComplete;
         GS->RoundState=ESPRoundState::Complete;
