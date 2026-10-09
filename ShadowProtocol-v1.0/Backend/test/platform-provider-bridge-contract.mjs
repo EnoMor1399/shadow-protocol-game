@@ -79,11 +79,11 @@ test('signed platform assertions are cryptographically bound to the exchanged de
   assert.match(server, /platform-identity-nonce-mismatch/);
 });
 
-test('default project config keeps provider gateway unset and NULL only as local OSS baseline', async () => {
+test('default project config pins the trusted production gateway and keeps NULL only as local OSS baseline', async () => {
   const ini = await source('../../Config/DefaultEngine.ini');
 
   assert.match(ini, /DefaultPlatformService=NULL/);
   assert.match(ini, /SPPlatformIdentitySubsystem/);
-  assert.match(ini, /IdentityGatewayBaseUrl=\s*\n/);
+  assert.match(ini, /IdentityGatewayBaseUrl=https:\/\/shadow-protocol-identity-gateway\.onrender\.com\s*\n/);
   assert.match(ini, /bAttemptAutoLogin=true/);
 });
