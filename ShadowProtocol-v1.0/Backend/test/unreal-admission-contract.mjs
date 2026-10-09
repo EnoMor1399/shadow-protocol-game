@@ -396,3 +396,40 @@ test('platform identity assertion exchange installs backend session without clie
   assert.doesNotMatch(cpp, /SESSION_BOOTSTRAP_SECRET/);
   assert.doesNotMatch(cpp, /PLATFORM_IDENTITY_ASSERTION_SECRET/);
 });
+
+
+test('dedicated server fails closed on heartbeat loss and recovers admission health', async () => {
+  const header = await source('../../Source/ShadowProtocol/Public/SPDedicatedServerBackendSubsystem.h');
+  const server = await source('../../Source/ShadowProtocol/Private/SPDedicatedServerBackendSubsystem.cpp');
+  const mode = await source('../../Source/ShadowProtocol/Private/SPProtocolGameMode.cpp');
+
+  assert.match(header, /IsHeartbeatHealthy\(\) const \{ return bHeartbeatHealthy; \}/);
+  assert.match(header, /HeartbeatFailureThreshold = 3/);
+  assert.match(server, /RecordHeartbeatFailure/);
+  assert.match(server, /ConsecutiveHeartbeatFailures >= HeartbeatFailureThreshold/);
+  assert.match(server, /bHeartbeatHealthy = false/);
+  assert.match(server, /RecordHeartbeatSuccess\(\)/);
+  assert.match(server, /bHeartbeatHealthy = true/);
+  assert.match(server, /!bHeartbeatHealthy \|\| AllocationId\.IsEmpty/);
+  assert.match(mode, /!Backend->IsHeartbeatHealthy\(\)/);
+});
+
+test('dedicated server releases the whole backend match atomically at lifecycle completion', async () => {
+  const backend = await source('../src/server.ts');
+  const serverHeader = await source('../../Source/ShadowProtocol/Public/SPDedicatedServerBackendSubsystem.h');
+  const server = await source('../../Source/ShadowProtocol/Private/SPDedicatedServerBackendSubsystem.cpp');
+  const modeHeader = await source('../../Source/ShadowProtocol/Public/SPProtocolGameMode.h');
+  const mode = await source('../../Source/ShadowProtocol/Private/SPProtocolGameMode.cpp');
+
+  assert.match(backend, /\/v1\/servers\/release-match/);
+  assert.match(backend, /releasedAllocations/);
+  assert.match(backend, /active_allocations=greatest\(0,active_allocations-\$2\)/);
+  assert.match(backend, /assembly_state=\$2,ended_at=coalesce\(ended_at,now\(\)\)/);
+  assert.match(serverHeader, /void ReleaseMatch\(const FString& MatchId, bool bFailed = false\)/);
+  assert.match(server, /TEXT\("\/v1\/servers\/release-match"\)/);
+  assert.match(modeHeader, /FString ActiveBackendMatchId/);
+  assert.match(mode, /Admission targets a different active backend match/);
+  assert.match(mode, /Backend->ReleaseMatch\(ActiveBackendMatchId, false\)/);
+  assert.match(mode, /Backend->ReleaseMatch\(ActiveBackendMatchId, true\)/);
+  assert.match(mode, /OnMatchReleased\.AddDynamic/);
+});
