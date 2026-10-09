@@ -99,5 +99,7 @@ protected:
     TMap<FString,FSPPendingPlayerAdmission> PendingAdmissions;
     TMap<int32,float> ReconnectDeadlines;
     TMap<FString,FString> AdmittedPlayerMatches;
+    FString ActiveBackendMatchId;
+    bool bBackendMatchReleaseRequested = false;
     TMap<TWeakObjectPtr<ASPCharacter>,TMap<TWeakObjectPtr<ASPPlayerState>,float>> DamageLedger;
 };
