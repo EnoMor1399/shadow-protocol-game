@@ -204,6 +204,18 @@ void USPPlatformIdentitySubsystem::ContinueWithLoggedInIdentity(uint64 Generatio
         return;
     }
 
+    if (PendingProvider == TEXT("steam"))
+    {
+        PendingIdentity->GetLinkedAccountAuthToken(
+            0,
+            TEXT("WebAPI:shadow-protocol"),
+            IOnlineIdentity::FOnGetLinkedAccountAuthTokenCompleteDelegate::CreateUObject(
+                this,
+                &USPPlatformIdentitySubsystem::HandleSteamWebApiToken,
+                Generation));
+        return;
+    }
+
     FString AuthToken = PendingIdentity->GetAuthToken(0);
     AuthToken.TrimStartAndEndInline();
     if (AuthToken.Len() < 16 || AuthToken.Len() > 16384)
@@ -215,6 +227,32 @@ void USPPlatformIdentitySubsystem::ContinueWithLoggedInIdentity(uint64 Generatio
     const FString AuthType = PendingIdentity->GetAuthType();
     SubmitProviderToken(AuthToken, AuthType, Generation);
     AuthToken.Reset();
+}
+
+void USPPlatformIdentitySubsystem::HandleSteamWebApiToken(
+    int32 LocalUserNum,
+    bool bWasSuccessful,
+    const FExternalAuthToken& AuthToken,
+    uint64 Generation)
+{
+    if (Generation != RequestGeneration || LocalUserNum != 0) return;
+    if (!bWasSuccessful || PendingProvider != TEXT("steam"))
+    {
+        Fail(TEXT("Steam did not return a Web API authentication ticket."));
+        return;
+    }
+
+    FString Ticket = AuthToken.TokenString;
+    Ticket.TrimStartAndEndInline();
+    if (Ticket.Len() < 32 || Ticket.Len() > 32768 || (Ticket.Len() % 2) != 0)
+    {
+        Ticket.Reset();
+        Fail(TEXT("Steam returned an invalid Web API authentication ticket."));
+        return;
+    }
+
+    SubmitProviderToken(Ticket, TEXT("WebAPI:shadow-protocol"), Generation);
+    Ticket.Reset();
 }
 
 void USPPlatformIdentitySubsystem::SubmitProviderToken(const FString& AuthToken, const FString& AuthType, uint64 Generation)
