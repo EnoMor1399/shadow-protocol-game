@@ -150,9 +150,9 @@ void ASPProtocolGameMode::PreLogin(
     }
 
     USPDedicatedServerBackendSubsystem* Backend = GetDedicatedServerBackend();
-    if (!Backend || !Backend->IsConfigured() || !Backend->IsRegistered() || Backend->IsDraining())
+    if (!Backend || !Backend->IsConfigured() || !Backend->IsRegistered() || Backend->IsDraining() || !Backend->IsHeartbeatHealthy())
     {
-        ErrorMessage = TEXT("Dedicated server admission service is unavailable.");
+        ErrorMessage = TEXT("Dedicated server admission service is unavailable or unhealthy.");
         return;
     }
 
@@ -343,9 +343,9 @@ void ASPProtocolGameMode::PostLogin(APlayerController* NewPlayer)
 
         FSPPendingPlayerAdmission* Pending = PendingAdmissions.Find(AllocationId);
         USPDedicatedServerBackendSubsystem* Backend = GetDedicatedServerBackend();
-        if (!Pending || !Backend || !Backend->IsRegistered() || Backend->IsDraining())
+        if (!Pending || !Backend || !Backend->IsRegistered() || Backend->IsDraining() || !Backend->IsHeartbeatHealthy())
         {
-            RejectPendingAdmission(AllocationId, TEXT("Dedicated-server admission service became unavailable."));
+            RejectPendingAdmission(AllocationId, TEXT("Dedicated-server admission service became unavailable or unhealthy."));
             return;
         }
 
